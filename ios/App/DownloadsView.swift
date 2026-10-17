@@ -94,6 +94,8 @@ struct DownloadsView: View {
                 if job.state == .failed {
                     Button("Réessayer") { Downloader.shared.retry(jobID: job.id) }
                         .font(.caption.weight(.semibold))
+                    Button("Forcer WebKit") { Downloader.shared.forceWebKit(jobID: job.id) }
+                        .font(.caption.weight(.semibold))
                 }
                 if job.state == .running || job.state == .queued {
                     Button("Annuler") { Downloader.shared.cancel(jobID: job.id) }

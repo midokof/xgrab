@@ -45,8 +45,30 @@ final class Downloader: NSObject, ObservableObject {
         return components
     }
 
-    /// Message d'erreur lisible pour les refus de CDN.
-    static func describe(status: Int) -> String {
+    /// Un CDN qui refuse URLSession verifie l'empreinte TLS du client, pas
+    /// seulement les en-tetes. On passe alors la main au moteur WebKit, qui
+    /// passe toujours.
+    @discardableResult
+    static func retryViaWebKit(id: String) -> Bool {
+        guard let job = JobStore.shared.job(id: id),
+              let url = URL(string: job.url),
+              !job.isHLS else { return false }
+
+        let page = URL(string: job.referer)
+        JobStore.shared.update(id: id) {
+            $0.state = .running
+            $0.error = "Reprise via le moteur du navigateur..."
+        }
+        WebDownloader.shared.start(
+            jobID: id,
+            url: url,
+            pageURL: page,
+            filename: job.filename
+        )
+        return true
+    }
+
+    /// Message d'erreur lisible pour les refus de CDN.    static func describe(status: Int) -> String {
         switch status {
         case 401: return "HTTP 401 - le lien exige une authentification"
         case 403: return "HTTP 403 - le CDN refuse : referer, cookies ou UA manquants"
@@ -185,6 +207,11 @@ final class Downloader: NSObject, ObservableObject {
         )
     }
 
+    /// Relance le telechargement en passant par le moteur WebKit.
+    func forceWebKit(jobID: String) {
+        _ = Self.retryViaWebKit(id: jobID)
+    }
+
     func delete(jobID: String) {
         cancel(jobID: jobID)
         if let path = JobStore.shared.job(id: jobID)?.localPath {
@@ -228,6 +255,7 @@ extension Downloader: URLSessionDownloadDelegate {
         let response = downloadTask.response as? HTTPURLResponse
         let status = response?.statusCode ?? 0
         guard (200..<300).contains(status) else {
+            if status == 403, Self.retryViaWebKit(id: id) { return }
             JobStore.shared.update(id: id) {
                 $0.state = .failed
                 $0.error = Self.describe(status: status)
