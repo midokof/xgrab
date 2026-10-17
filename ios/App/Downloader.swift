@@ -76,7 +76,7 @@ final class Downloader: NSObject, ObservableObject {
         hls = AVAssetDownloadURLSession(
             configuration: hlsConfig,
             assetDownloadDelegate: self,
-            assetDownloadQueue: nil
+            delegateQueue: nil
         )
     }
 
@@ -105,14 +105,8 @@ final class Downloader: NSObject, ObservableObject {
         }
 
         if Self.isHLS(url) {
-            guard let asset = AVURLAsset(url: parsed) else {
-                JobStore.shared.update(id: job.id) {
-                    $0.state = .failed
-                    $0.error = "Flux illisible"
-                }
-                return job
-            }
-            let options: [AVAssetDownloadTaskOption: Any] = []
+            let asset = AVURLAsset(url: parsed)
+            let options: [String: Any] = [:]
             let task = hls.makeAssetDownloadTask(
                 asset: asset,
                 assetTitle: job.filename,
