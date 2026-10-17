@@ -88,6 +88,23 @@ jobs:
           echo "$app" > "$RUNNER_TEMP/app-path"
           ls -la "$app"
 
+      - name: Verify the bundle metadata
+        # installd refuse un bundle dont CFBundleExecutable ne correspond pas
+        # a un fichier reellement present : on le verifie ici plutot que sur
+        # le telephone.
+        run: |
+          set -euo pipefail
+          app=$(cat "$RUNNER_TEMP/app-path")
+          exe=$(/usr/libexec/PlistBuddy -c "Print :CFBundleExecutable" "$app/Info.plist")
+          echo "CFBundleExecutable = $exe"
+          test -f "$app/$exe" || { echo "EXECUTABLE ABSENT : $app/$exe"; exit 1; }
+          ext=$(find "$app/PlugIns" -maxdepth 1 -name "*.appex" | head -1)
+          test -n "$ext" || { echo "EXTENSION ABSENTE"; exit 1; }
+          extexe=$(/usr/libexec/PlistBuddy -c "Print :CFBundleExecutable" "$ext/Info.plist")
+          echo "Extension CFBundleExecutable = $extexe"
+          test -f "$ext/$extexe" || { echo "EXECUTABLE EXTENSION ABSENT"; exit 1; }
+          plutil -p "$app/Info.plist" | head -20
+
       - name: Archive (signed)
         if: steps.secrets.outputs.signed == 'true'
         run: |

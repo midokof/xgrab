@@ -13,6 +13,15 @@
 	<key>CFBundleIdentifier</key>
 	<string>$(PRODUCT_BUNDLE_IDENTIFIER)</string>
 
+	<!-- Comme pour l'app : GENERATE_INFOPLIST_FILE etant a NO, ces cles
+	     doivent etre declarees explicitement. -->
+	<key>CFBundleExecutable</key>
+	<string>$(EXECUTABLE_NAME)</string>
+	<key>CFBundlePackageType</key>
+	<string>XPC!</string>
+	<key>CFBundleInfoDictionaryVersion</key>
+	<string>6.0</string>
+
 	<key>NSExtension</key>
 	<dict>
 		<key>NSExtensionPointIdentifier</key>
