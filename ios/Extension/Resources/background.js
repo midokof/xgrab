@@ -5,7 +5,8 @@
  *  - le PC est designe par son adresse IP locale, pas 127.0.0.1
  */
 
-const HOST_APP = "com.xgrab.app";
+/* Doit correspondre a PRODUCT_BUNDLE_IDENTIFIER de la cible app.xgrab. */
+const HOST_APP = "app.xgrab.XGrab";
 const DEFAULTS = { host: "", port: 38471, token: "" };
 
 let cache = null;
