@@ -93,10 +93,9 @@ private struct WebViewRepresentable: UIViewRepresentable {
         web.navigationDelegate = context.coordinator
         web.allowsBackForwardNavigationGestures = true
         context.coordinator.web = web
+        // attach() lance deja le premier chargement : un second load()
+        // annulerait le premier et provoquerait une erreur -999.
         model.attach(web)
-
-        // Le moteur est construit une fois, pas a chaque rendu SwiftUI.
-        DispatchQueue.main.async { web.load(URLRequest(url: URL(string: "https://duckduckgo.com")!)) }
         return web
     }
 
@@ -129,14 +128,14 @@ private struct WebViewRepresentable: UIViewRepresentable {
 
         func webView(_ web: WKWebView, didFail navigation: WKNavigation!, withError error: Error) {
             model.loading = false
-            model.hint = "Chargement impossible : \(error.localizedDescription)"
+            model.report(error)
         }
 
         func webView(_ web: WKWebView,
                      didFailProvisionalNavigation navigation: WKNavigation!,
                      withError error: Error) {
             model.loading = false
-            model.hint = "Site injoignable : \(error.localizedDescription)"
+            model.report(error)
         }
     }
 }
@@ -217,6 +216,14 @@ final class BrowserModel: ObservableObject {
         hint = segmented
             ? "Flux segmenté : XGrab transmettra la page, pas le fichier."
             : "Media détecté : \((media as NSString).lastPathComponent.prefix(60))"
+    }
+
+    /// Une navigation annulee (-999) est normale : elle est remplacee par la
+    /// suivante. Seul le dernier echec reel est affiche.
+    func report(_ error: Error) {
+        let nsError = error as NSError
+        if nsError.code == NSURLErrorCancelled { return }
+        hint = "Chargement impossible : \(nsError.localizedDescription)"
     }
 
     // ---------------------------------------------------------------- injection
