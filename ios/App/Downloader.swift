@@ -135,15 +135,19 @@ final class Downloader: NSObject, ObservableObject {
             if let jar = cookies, !jar.isEmpty { headers["Cookie"] = jar }
             if !referer.isEmpty { headers["Referer"] = referer }
 
+            // La constante Swift n'est pas exposee : on utilise la cle
+            // litterale attendue par AVURLAsset.
+            let headerKey = "AVURLAssetHTTPHeaderFieldsKey"
             let options: [String: Any] = headers.isEmpty
                 ? [:]
-                : [AVURLAssetHTTPHeaderFieldsKey: headers]
+                : [headerKey: headers]
             let asset = AVURLAsset(url: parsed, options: options)
+            let taskOptions: [String: Any] = [:]
             let task = hls.makeAssetDownloadTask(
                 asset: asset,
                 assetTitle: job.filename,
                 assetArtworkData: nil,
-                options: [:]
+                options: taskOptions
             )
             task?.taskDescription = job.id
             task?.resume()
