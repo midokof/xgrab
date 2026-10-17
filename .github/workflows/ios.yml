@@ -52,19 +52,19 @@ jobs:
           mkdir -p "$RUNNER_TEMP/keys"
           printf '%s' "$KEY_P8" > "$RUNNER_TEMP/keys/AuthKey_${KEY_ID}.p8"
 
-      - name: Archive (unsigned)
+      - name: Build (unsigned)
         if: steps.secrets.outputs.signed == 'false'
         run: |
           set -uo pipefail
-          # Sans signature, il faut neutraliser aussi le style et l'equipe :
-          # sinon Xcode tente de resoudre un profil de developpement et echoue
-          # avec "requires a development team" avant meme de compiler.
-          xcodebuild archive \
+          # "archive" valide systematiquement la signature et refuse une
+          # cible de type App Extension meme avec CODE_SIGNING_ALLOWED=NO.
+          # "build" passe par-dessus, ce qui suffit pour TrollStore.
+          xcodebuild build \
             -project ios/XGrab.xcodeproj \
             -scheme XGrab \
             -configuration Release \
             -destination "generic/platform=iOS" \
-            -archivePath "$RUNNER_TEMP/XGrab.xcarchive" \
+            -derivedDataPath "$RUNNER_TEMP/dd" \
             CODE_SIGNING_ALLOWED=NO \
             CODE_SIGNING_REQUIRED=NO \
             CODE_SIGN_IDENTITY="" \
@@ -77,6 +77,15 @@ jobs:
           tail -n 60 "$RUNNER_TEMP/xcodebuild.log" >> "$GITHUB_STEP_SUMMARY"
           echo '```' >> "$GITHUB_STEP_SUMMARY"
           exit $code
+
+      - name: Locate the built app
+        if: steps.secrets.outputs.signed == 'false'
+        run: |
+          set -euo pipefail
+          app=$(find "$RUNNER_TEMP/dd/Build/Products" -maxdepth 2 -name "XGrab.app" | head -1)
+          echo "APP=$app"
+          echo "$app" > "$RUNNER_TEMP/app-path"
+          ls -la "$app"
 
       - name: Archive (signed)
         if: steps.secrets.outputs.signed == 'true'
@@ -101,8 +110,7 @@ jobs:
           # Un IPA est un zip dont la racine contient Payload/. On assemble
           # l'arborescence avant de compresser, sinon TrollStore refuse.
           mkdir -p "$RUNNER_TEMP/stage/Payload" "$RUNNER_TEMP/ipa"
-          ditto "$RUNNER_TEMP/XGrab.xcarchive/Products/Applications/XGrab.app" \
-            "$RUNNER_TEMP/stage/Payload/XGrab.app"
+          ditto "$(cat "$RUNNER_TEMP/app-path")" "$RUNNER_TEMP/stage/Payload/XGrab.app"
           cd "$RUNNER_TEMP/stage"
           ditto -c -k --sequesterRsrc --keepParent Payload \
             "$RUNNER_TEMP/ipa/XGrab-unsigned.ipa"
