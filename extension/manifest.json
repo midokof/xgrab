@@ -1,0 +1,38 @@
+{
+  "manifest_version": 3,
+  "name": "XGrab",
+  "version": "1.0.0",
+  "description": "Bouton de téléchargement XGrab sur les vidéos, comme Internet Download Manager.",
+  "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAxyhMHFVr24phLFtFEnCfdyQhlH1okFONwL3DSaB0FxECjGtj7gjbgr8yejUCXlh0CW7H8evSeVLoRPZZmomYR4iZn5eNZ71I8aExHhujU4wiUKm8DTLRaMuGrG9sSpH9F6j8fxsKop3V3jGKNpPAlnHioQU1AWwtTChGsUNWuqo31KKk29Rc0C5fPIrRCUdRiESyDkjvwCjNKDvYDBqqBqlFxArfG8jA0JpYXY7IEJSsLxkE06BN8SyAxSIbuyvRv224BDNPjHSSLOIRopobhO5gpGnaCX1O4N6HCzeq3o4vb7ug+NRBPN5taGJrKCfylNzcIsfVjp1m5VPypsCclwIDAQAB",
+  "permissions": [
+    "storage",
+    "nativeMessaging"
+  ],
+  "host_permissions": [
+    "http://127.0.0.1/*"
+  ],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "content_scripts": [
+    {
+      "matches": [
+        "<all_urls>"
+      ],
+      "js": [
+        "content.js"
+      ],
+      "run_at": "document_idle",
+      "all_frames": true
+    }
+  ],
+  "action": {
+    "default_title": "XGrab"
+  },
+  "browser_specific_settings": {
+    "gecko": {
+      "id": "xgrab@local",
+      "strict_min_version": "121.0"
+    }
+  }
+}

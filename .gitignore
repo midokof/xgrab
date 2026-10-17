@@ -1,0 +1,33 @@
+# --- build Windows ---
+build/
+dist/
+*.spec
+
+# --- Python ---
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.pytest_cache/
+.mypy_cache/
+
+# --- credentials ---
+config.json
+*.p12
+*.p8
+*.mobileprovision
+*.keystore
+
+# --- iOS genere ---
+ios/*.xcodeproj/
+ios/*.xcworkspace/
+ios/build/
+ios/DerivedData/
+*.ipa
+*.xcarchive
+
+# --- OS / IDE ---
+Thumbs.db
+.DS_Store
+.vscode/
+.idea/
