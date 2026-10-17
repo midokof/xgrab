@@ -38,7 +38,8 @@ final class Downloader: NSObject, ObservableObject {
         url.lowercased().contains(".mpd")
     }
 
-    static func filename(for url: String) -> String {        guard let components = URL(string: url)?.lastPathComponent,
+    static func filename(for url: String) -> String {
+        guard let components = URL(string: url)?.lastPathComponent,
               !components.isEmpty, components != "/" else {
             return "video-\(Int(Date().timeIntervalSince1970)).mp4"
         }
@@ -68,7 +69,8 @@ final class Downloader: NSObject, ObservableObject {
         return true
     }
 
-    /// Message d'erreur lisible pour les refus de CDN.    static func describe(status: Int) -> String {
+    /// Message d'erreur lisible pour les refus de CDN.
+    static func describe(status: Int) -> String {
         switch status {
         case 401: return "HTTP 401 - le lien exige une authentification"
         case 403: return "HTTP 403 - le CDN refuse : referer, cookies ou UA manquants"
