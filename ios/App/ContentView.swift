@@ -1,14 +1,5 @@
 import SwiftUI
 
-@main
-struct XGrabApp: App {
-    var body: some Scene {
-        WindowGroup {
-            ContentView()
-        }
-    }
-}
-
 struct ContentView: View {
     @AppStorage("host", store: Shared.store) private var host = ""
     @AppStorage("port", store: Shared.store) private var port = 38471
