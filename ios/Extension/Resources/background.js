@@ -53,12 +53,27 @@ async function config() {
 }
 
 async function send(urls, referer) {
-  const cfg = await config();
-
-  if (cfg.missing || !cfg.host) {
-    return { ok: false, error: "Adresse du PC non configuree - ouvre l'app XGrab" };
-  }
   if (!urls || !urls.length) return { ok: false, error: "aucun lien" };
+
+  /* 1. L'app conteneur telecharge directement sur l'iPhone. */
+  try {
+    const reply = await chrome.runtime.sendNativeMessage(HOST_APP, {
+      type: "xgrab-add",
+      urls: urls,
+      referer: referer || "",
+    });
+    if (reply && reply.ok) {
+      return { ok: true, added: reply.added || urls.length, started: true };
+    }
+  } catch (err) {
+    /* app conteneur indisponible : on bascule sur le PC */
+  }
+
+  /* 2. Repli : le PC dechote les liens comme la version desktop. */
+  const cfg = await config();
+  if (cfg.missing || !cfg.host) {
+    return { ok: false, error: "Ni l'app ni un PC ne repondent" };
+  }
 
   const base = `http://${cfg.host}:${cfg.port}`;
   try {

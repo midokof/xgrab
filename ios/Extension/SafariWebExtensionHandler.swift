@@ -42,6 +42,14 @@ class SafariWebExtensionHandler: NSObject, NSExtensionRequestHandling {
             ]
             os_log("config demandee : %{public}@:%d", log: log, type: .debug, bridge.host, bridge.port)
 
+        case "xgrab-add":
+            // Le service worker delegue ici : c'est l'app qui telecharge.
+            let urls = message["urls"] as? [String] ?? []
+            let referer = message["referer"] as? String ?? ""
+            let queued = urls.compactMap { Downloader.shared.enqueue(url: $0, referer: referer) }
+            response = ["ok": !queued.isEmpty, "added": queued.count, "started": false]
+            os_log("%d lien(s) mis en file", log: log, type: .debug, queued.count)
+
         case "xgrab-save":
             if let host = message["host"] as? String,
                let port = message["port"] as? Int,
