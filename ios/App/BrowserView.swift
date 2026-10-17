@@ -233,26 +233,36 @@ final class BrowserModel: ObservableObject {
     /// On reprend le User-Agent et les cookies du WKWebView : sans eux, les
     /// CDN renvoient 403 sur un fichier qu'ils servent pourtant au navigateur.
     func download() {
-        guard let media = mediaURL, let web = web else { return }
+        CrashLog.step("download: debut, media=\(mediaURL ?? "nil")")
+        guard let media = mediaURL, let web = web else {
+            CrashLog.step("download: media ou web manquant")
+            return
+        }
         let referer = shown
 
         web.evaluateJavaScript("navigator.userAgent") { [weak self] value, _ in
             let agent = (value as? String) ?? ""
+            CrashLog.step("download: UA obtenu (\(agent.count) caracteres)")
 
             web.configuration.websiteDataStore.httpCookieStore.getAllCookies { cookies in
+                CrashLog.step("download: \(cookies.count) cookie(s) recus")
                 let jar = self?.cookieHeader(cookies, for: media) ?? ""
 
                 DispatchQueue.main.async {
+                    guard let self = self else { return }
+                    CrashLog.step("download: enqueue, jar=\(jar.count) caracteres")
                     guard Downloader.shared.enqueue(
                         url: media,
                         referer: referer,
                         userAgent: agent,
                         cookies: jar
                     ) != nil else {
-                        self?.hint = "Lien non telechargeable"
+                        CrashLog.step("download: enqueue a echoue")
+                        self.hint = "Lien non telechargeable"
                         return
                     }
-                    self?.hint = self?.segmented == true
+                    CrashLog.step("download: enqueue ok")
+                    self.hint = self.segmented
                         ? "Page transmise au PC si un serveur est configure"
                         : "Ajouté à l'onglet Fichiers"
                 }

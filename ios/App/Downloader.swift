@@ -118,8 +118,10 @@ final class Downloader: NSObject, ObservableObject {
 
     @discardableResult
     func enqueue(url: String, referer: String, userAgent: String? = nil, cookies: String? = nil) -> Job? {
+        CrashLog.step("enqueue: \(url.prefix(80))")
         guard let parsed = URL(string: url),
               parsed.scheme?.lowercased() == "http" || parsed.scheme?.lowercased() == "https" else {
+            CrashLog.step("enqueue: URL refusee")
             return nil
         }
 
@@ -129,6 +131,7 @@ final class Downloader: NSObject, ObservableObject {
             userAgent: userAgent,
             cookies: cookies
         )
+        CrashLog.step("enqueue: job \(job.id) cree")
 
         if Self.isDASH(url) {
             JobStore.shared.update(id: job.id) {
@@ -178,10 +181,12 @@ final class Downloader: NSObject, ObservableObject {
         } else {
             let task = downloads.downloadTask(with: request)
             task.taskDescription = job.id
+            CrashLog.step("enqueue: task \(task.taskIdentifier) relancee")
             task.resume()
         }
 
         JobStore.shared.update(id: job.id) { $0.state = .running }
+        CrashLog.step("enqueue: termine")
         return job
     }
 

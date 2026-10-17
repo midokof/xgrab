@@ -2,6 +2,14 @@ import SwiftUI
 import UIKit
 
 final class AppDelegate: NSObject, UIApplicationDelegate {
+    /// Installe le journal de crash avant tout le reste : une erreur
+    /// fatale survenue ensuite laisse une trace de la derniere etape.
+    override init() {
+        super.init()
+        CrashLog.install()
+        CrashLog.step("demarrage de l'app")
+    }
+
     /// iOS reveille le processus quand une session en arriere-plan finit :
     /// sans ce relais, l'app serait tuee avant d'avoir range les fichiers.
     func application(
@@ -36,6 +44,7 @@ struct XGrabApp: App {
     /// L'extension depose les liens dans le conteneur partage ; on les recupere
     /// des que l'app est affichee.
     private func drainPending() {
+        CrashLog.step("drainPending")
         for request in PendingQueue.drain() {
             for url in request.urls {
                 Downloader.shared.enqueue(url: url, referer: request.referer)

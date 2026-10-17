@@ -2,6 +2,7 @@ import SwiftUI
 
 struct DownloadsView: View {
     @ObservedObject private var store = JobStore.shared
+    @State private var showDiagnostic = false
 
     var body: some View {
         NavigationStack {
@@ -14,6 +15,13 @@ struct DownloadsView: View {
             }
             .navigationTitle("Téléchargements")
             .toolbar {
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button {
+                        showDiagnostic = true
+                    } label: {
+                        Image(systemName: "stethoscope")
+                    }
+                }
                 ToolbarItem(placement: .topBarTrailing) {
                     Button {
                         drainPending()
@@ -30,6 +38,9 @@ struct DownloadsView: View {
                         }
                     }
                 }
+            }
+            .sheet(isPresented: $showDiagnostic) {
+                DiagnosticView()
             }
         }
     }

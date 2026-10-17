@@ -65,13 +65,11 @@ final class JobStore: ObservableObject {
         }
     }
 
-    private func persist() {
-        let snapshot = jobs
-        queue.async { [weak self] in
+    private func persist(_ snapshot: [Job]) {
+        queue.async {
             guard let url = JobStore.storeURL,
                   let data = try? JSONEncoder().encode(snapshot) else { return }
             try? data.write(to: url, options: .atomic)
-            _ = self
         }
     }
 
@@ -136,7 +134,7 @@ final class JobStore: ObservableObject {
     private func apply(_ mutate: (inout [Job]) -> Void) {
         var copy = jobs
         mutate(&copy)
-        persist()
+        persist(copy)
         publish(copy)
     }
 }
