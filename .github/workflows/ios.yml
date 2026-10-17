@@ -55,7 +55,10 @@ jobs:
       - name: Archive (unsigned)
         if: steps.secrets.outputs.signed == 'false'
         run: |
-          set -euo pipefail
+          set -uo pipefail
+          # Sans signature, il faut neutraliser aussi le style et l'equipe :
+          # sinon Xcode tente de resoudre un profil de developpement et echoue
+          # avec "requires a development team" avant meme de compiler.
           xcodebuild archive \
             -project ios/XGrab.xcodeproj \
             -scheme XGrab \
@@ -65,7 +68,15 @@ jobs:
             CODE_SIGNING_ALLOWED=NO \
             CODE_SIGNING_REQUIRED=NO \
             CODE_SIGN_IDENTITY="" \
-            -quiet
+            CODE_SIGN_STYLE=Manual \
+            DEVELOPMENT_TEAM="" \
+            PROVISIONING_PROFILE_SPECIFIER="" \
+            2>&1 | tee "$RUNNER_TEMP/xcodebuild.log"
+          code=${PIPESTATUS[0]}
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+          tail -n 60 "$RUNNER_TEMP/xcodebuild.log" >> "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+          exit $code
 
       - name: Archive (signed)
         if: steps.secrets.outputs.signed == 'true'
@@ -121,6 +132,20 @@ jobs:
             -exportOptionsPlist "$RUNNER_TEMP/ExportOptions.plist" \
             -allowProvisioningUpdates \
             -authenticationKeyPath "$RUNNER_TEMP/keys/AuthKey_${KEY_ID}.p8"
+
+      - name: Publish the build log
+        # Sans authentification, l'API des logs est inaccessible : on commit
+        # le journal dans le depot pour pouvoir le lire localement.
+        if: always()
+        run: |
+          mkdir -p ci
+          tail -n 400 "$RUNNER_TEMP/xcodebuild.log" > ci/xcodebuild.log 2>/dev/null \
+            || echo "pas de journal" > ci/xcodebuild.log
+          git config user.name "ci"
+          git config user.email "ci@local"
+          git add ci/xcodebuild.log
+          git commit -m "ci: journal du build" || true
+          git push origin HEAD:main || true
 
       - name: Upload the IPA
         uses: actions/upload-artifact@v4
