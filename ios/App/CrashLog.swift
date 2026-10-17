@@ -21,24 +21,11 @@ enum CrashLog {
 
     /// A appeler au demarrage de l'app.
     static func install() {
-        NSSetUncaughtExceptionHandler { exception in
-            step("EXCEPTION : \(exception.name.rawValue) - \(exception.reason ?? "?")")
-            flush()
-        }
+        NSSetUncaughtExceptionHandler(xgrabExceptionHandler)
 
         for signalNumber in [SIGSEGV, SIGBUS, SIGILL, SIGABRT, SIGTRAP] {
             signal(signalNumber, SIG_IGN)
-            signal(signalNumber) { received in
-                // Dans un handler de signal on n'ecrit que des operations
-                // sures : write() vers un descripteur, rien d'autre.
-                let message = "SIGNAL \(received) a \(CrashLog.lastStep())\n"
-                message.withCString { pointer in
-                    _ = write(2, pointer, strlen(pointer))
-                }
-                CrashLog.flush()
-                signal(received, SIG_DFL)
-                raise(received)
-            }
+            signal(signalNumber, xgrabSignalHandler)
         }
     }
 
@@ -78,4 +65,21 @@ enum CrashLog {
         let text = dump()
         try? text.write(to: url, atomically: true, encoding: .utf8)
     }
+}
+
+/// Un gestionnaire d'exception doit etre une fonction C, sans contexte
+/// capturant : d'ou ces deux fonctions globales.
+private func xgrabExceptionHandler(_ exception: NSException) {
+    CrashLog.step("EXCEPTION : \(exception.name.rawValue) - \(exception.reason ?? "?")")
+}
+
+private func xgrabSignalHandler(_ received: Int32) {
+    // Dans un handler de signal on n'ecrit que des operations sures :
+    // write() vers un descripteur, rien d'autre.
+    let message = "SIGNAL \(received) apres \(CrashLog.lastStep())\n"
+    message.withCString { pointer in
+        _ = write(2, pointer, strlen(pointer))
+    }
+    signal(received, SIG_DFL)
+    raise(received)
 }
