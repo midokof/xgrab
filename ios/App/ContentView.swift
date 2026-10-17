@@ -16,7 +16,7 @@ struct ContentView: View {
 
     @State private var status: Status = .idle
 
-    enum Status {
+    enum Status: Equatable {
         case idle, testing, ok(String), failed(String)
 
         var text: String {
