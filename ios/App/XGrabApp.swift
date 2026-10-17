@@ -23,6 +23,9 @@ struct XGrabApp: App {
                 DownloadsView()
                     .tabItem { Label("Fichiers", systemImage: "arrow.down.circle") }
 
+                BrowserView()
+                    .tabItem { Label("Navigateur", systemImage: "safari") }
+
                 ContentView()
                     .tabItem { Label("PC", systemImage: "desktopcomputer") }
             }
