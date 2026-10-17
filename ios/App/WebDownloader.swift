@@ -16,6 +16,7 @@ final class WebDownloader: NSObject {
     private var jobID: String?
     private var mediaURL: String?
     private var target: URL?
+    private var current: WKDownload?
     private var progressTimer: Timer?
     /// Passe a vrai une fois la page d'origine chargee : la navigation
     /// suivante (le media) doit etre traitee comme un telechargement.
@@ -41,8 +42,7 @@ final class WebDownloader: NSObject {
         self.web = view
 
         let folder = Downloader.mediaDirectory
-        let destination = unique(folder, filename)
-        self.target = destination
+        self.target = Self.unique(folder, filename)
 
         if let pageURL = pageURL {
             // La page d'abord : WebKit enverra son adresse comme Referer
@@ -71,9 +71,10 @@ final class WebDownloader: NSObject {
     }
 
     private func tick() {
-        guard let jobID = jobID, let web = web else { return }
-        let total = web.progress.totalUnitCount
-        let done = web.progress.completedUnitCount
+        guard let jobID = jobID, let download = current else { return }
+        let progress = download.progress
+        let total = progress.totalUnitCount
+        let done = progress.completedUnitCount
         guard total > 0 else { return }
         JobStore.shared.update(id: jobID) {
             $0.progress = min(max(Double(done) / Double(total), 0), 1)
@@ -158,11 +159,13 @@ extension WebDownloader: WKNavigationDelegate {
     }
 
     func webView(_ webView: WKWebView, navigationAction: WKNavigationAction, didBecome download: WKDownload) {
+        current = download
         download.delegate = self
         startProgress()
     }
 
     func webView(_ webView: WKWebView, navigationResponse: WKNavigationResponse, didBecome download: WKDownload) {
+        current = download
         download.delegate = self
         startProgress()
     }
@@ -184,7 +187,12 @@ extension WebDownloader: WKDownloadDelegate {
             finish(success: false, error: "HTTP \(status) - le CDN refuse toujours")
             return
         }
-        completionHandler(target)
+        // Le nom fourni par le serveur (Content-Disposition) est plus fiable
+        // que celui devine depuis l'URL.
+        let wanted = suggestedFilename.isEmpty ? (target?.lastPathComponent ?? "video.mp4") : suggestedFilename
+        let destination = Self.unique(Downloader.mediaDirectory, wanted)
+        self.target = destination
+        completionHandler(destination)
     }
 
     func downloadDidFinish(_ download: WKDownload) {
