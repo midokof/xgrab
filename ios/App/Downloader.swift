@@ -31,19 +31,29 @@ final class Downloader: NSObject, ObservableObject {
 
     static func isHLS(_ url: String) -> Bool {
         let lower = url.lowercased()
-        return lower.contains(".m3u8") || lower.contains("manifest.mpd") == false && lower.contains("videoplayback")
+        return lower.contains(".m3u8")
     }
 
     static func isDASH(_ url: String) -> Bool {
         url.lowercased().contains(".mpd")
     }
 
-    static func filename(for url: String) -> String {
-        guard let components = URL(string: url)?.lastPathComponent,
+    static func filename(for url: String) -> String {        guard let components = URL(string: url)?.lastPathComponent,
               !components.isEmpty, components != "/" else {
             return "video-\(Int(Date().timeIntervalSince1970)).mp4"
         }
         return components
+    }
+
+    /// Message d'erreur lisible pour les refus de CDN.
+    static func describe(status: Int) -> String {
+        switch status {
+        case 401: return "HTTP 401 - le lien exige une authentification"
+        case 403: return "HTTP 403 - le CDN refuse : referer, cookies ou UA manquants"
+        case 404: return "HTTP 404 - le lien a expire"
+        case 429: return "HTTP 429 - trop de requetes, reessaie plus tard"
+        default: return "HTTP \(status)"
+        }
     }
 
     /// Evite d'ecraser un fichier deja telecharge.
@@ -83,13 +93,18 @@ final class Downloader: NSObject, ObservableObject {
     // -------------------------------------------------------------------- actions
 
     @discardableResult
-    func enqueue(url: String, referer: String) -> Job? {
+    func enqueue(url: String, referer: String, userAgent: String? = nil, cookies: String? = nil) -> Job? {
         guard let parsed = URL(string: url),
               parsed.scheme?.lowercased() == "http" || parsed.scheme?.lowercased() == "https" else {
             return nil
         }
 
-        let job = JobStore.shared.enqueue(url: url, referer: referer)
+        let job = JobStore.shared.enqueue(
+            url: url,
+            referer: referer,
+            userAgent: userAgent,
+            cookies: cookies
+        )
 
         if Self.isDASH(url) {
             JobStore.shared.update(id: job.id) {
@@ -103,15 +118,32 @@ final class Downloader: NSObject, ObservableObject {
         if !referer.isEmpty {
             request.setValue(referer, forHTTPHeaderField: "Referer")
         }
+        // Un CDN protege refuse les requetes qui ne portent ni le User-Agent
+        // du navigateur ni les cookies de session : sans cela, reponse 403.
+        if let agent = userAgent, !agent.isEmpty {
+            request.setValue(agent, forHTTPHeaderField: "User-Agent")
+        }
+        if let jar = cookies, !jar.isEmpty {
+            request.setValue(jar, forHTTPHeaderField: "Cookie")
+        }
 
         if Self.isHLS(url) {
-            let asset = AVURLAsset(url: parsed)
-            let options: [String: Any] = [:]
+            // AVURLAsset doit porter les memes en-tetes que le navigateur,
+            // sinon le CDN refuse le manifeste ou les segments.
+            var headers: [String: String] = [:]
+            if let agent = userAgent, !agent.isEmpty { headers["User-Agent"] = agent }
+            if let jar = cookies, !jar.isEmpty { headers["Cookie"] = jar }
+            if !referer.isEmpty { headers["Referer"] = referer }
+
+            let options: [String: Any] = headers.isEmpty
+                ? [:]
+                : [AVURLAssetHTTPHeaderFieldsKey: headers]
+            let asset = AVURLAsset(url: parsed, options: options)
             let task = hls.makeAssetDownloadTask(
                 asset: asset,
                 assetTitle: job.filename,
                 assetArtworkData: nil,
-                options: options
+                options: [:]
             )
             task?.taskDescription = job.id
             task?.resume()
@@ -141,7 +173,12 @@ final class Downloader: NSObject, ObservableObject {
     func retry(jobID: String) {
         guard let job = JobStore.shared.job(id: jobID) else { return }
         JobStore.shared.remove(id: jobID)
-        enqueue(url: job.url, referer: job.referer)
+        enqueue(
+            url: job.url,
+            referer: job.referer,
+            userAgent: job.userAgent,
+            cookies: job.cookies
+        )
     }
 
     func delete(jobID: String) {
@@ -189,7 +226,7 @@ extension Downloader: URLSessionDownloadDelegate {
         guard (200..<300).contains(status) else {
             JobStore.shared.update(id: id) {
                 $0.state = .failed
-                $0.error = "HTTP \(status)"
+                $0.error = Self.describe(status: status)
             }
             return
         }

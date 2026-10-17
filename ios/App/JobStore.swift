@@ -21,6 +21,11 @@ struct Job: Codable, Identifiable, Equatable {
 
     var addedAt: Date
 
+    /// Conserves pour pouvoir rejouer la requete : les CDN protegent
+    /// souvent le fichier par le User-Agent et les cookies de session.
+    var userAgent: String?
+    var cookies: String?
+
     var isActive: Bool { state == .queued || state == .running }
 }
 
@@ -91,7 +96,7 @@ final class JobStore: ObservableObject {
     // ------------------------------------------------------------------ ecriture
 
     @discardableResult
-    func enqueue(url: String, referer: String) -> Job {
+    func enqueue(url: String, referer: String, userAgent: String? = nil, cookies: String? = nil) -> Job {
         let job = Job(
             id: UUID().uuidString,
             url: url,
@@ -103,7 +108,9 @@ final class JobStore: ObservableObject {
             error: nil,
             localPath: nil,
             isHLS: Downloader.isHLS(url),
-            addedAt: Date()
+            addedAt: Date(),
+            userAgent: userAgent,
+            cookies: cookies
         )
         apply { $0.insert(job, at: 0) }
         return job

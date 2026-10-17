@@ -229,15 +229,47 @@ final class BrowserModel: ObservableObject {
     // ---------------------------------------------------------------- injection
 
     /// Lance le telechargement natif de ce que la page expose.
+    ///
+    /// On reprend le User-Agent et les cookies du WKWebView : sans eux, les
+    /// CDN renvoient 403 sur un fichier qu'ils servent pourtant au navigateur.
     func download() {
-        guard let media = mediaURL else { return }
-        guard Downloader.shared.enqueue(url: media, referer: shown) != nil else {
-            hint = "Lien non telechargeable"
-            return
+        guard let media = mediaURL, let web = web else { return }
+        let referer = shown
+
+        web.evaluateJavaScript("navigator.userAgent") { [weak self] value, _ in
+            let agent = (value as? String) ?? ""
+
+            web.configuration.websiteDataStore.httpCookieStore.getAllCookies { cookies in
+                let jar = self?.cookieHeader(cookies, for: media) ?? ""
+
+                DispatchQueue.main.async {
+                    guard Downloader.shared.enqueue(
+                        url: media,
+                        referer: referer,
+                        userAgent: agent,
+                        cookies: jar
+                    ) != nil else {
+                        self?.hint = "Lien non telechargeable"
+                        return
+                    }
+                    self?.hint = self?.segmented == true
+                        ? "Page transmise au PC si un serveur est configure"
+                        : "Ajouté à l'onglet Fichiers"
+                }
+            }
         }
-        hint = segmented
-            ? "Page transmise au PC si un serveur est configure"
-            : "Ajouté à l'onglet Fichiers"
+    }
+
+    /// Ne renvoie que les cookies qui concernent le domaine du media.
+    private func cookieHeader(_ cookies: [HTTPCookie], for url: String) -> String {
+        guard let host = URL(string: url)?.host?.lowercased() else { return "" }
+        return cookies
+            .filter { cookie in
+                let domain = cookie.domain.lowercased().trimmingCharacters(in: CharacterSet(charactersIn: "."))
+                return host == domain || host.hasSuffix("." + domain)
+            }
+            .map { "\($0.name)=\($0.value)" }
+            .joined(separator: "; ")
     }
 
     func inject() {
@@ -299,7 +331,9 @@ final class BrowserModel: ObservableObject {
         const video = best();
         let media = video ? sourceOf(video) : '';
         const segmented = !!media && SEG.test(media);
-        if (segmented) media = location.href;
+        // On renvoie l'URL reelle du flux, pas l'adresse de la page : le
+        // telechargeur natif sait traiter un m3u8, il ne sait pas analyser
+        // du HTML.
         window.webkit.messageHandlers.xgrab.postMessage({
           event: 'media',
           media: media || null,
