@@ -186,9 +186,8 @@ final class BrowserModel: ObservableObject {
 
     private static func normalise(_ text: String) -> URL? {
         if let url = URL(string: text), url.scheme != nil { return url }
-        let candidate = "https://duckduckgo.com/?q=" + text.addingPercentEncoding(
-            withAllowedCharacters: .urlQueryAllowed
-        ) ?? ""
+        let encoded = text.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? ""
+        let candidate = "https://duckduckgo.com/?q=" + encoded
         return URL(string: candidate)
     }
 
@@ -217,7 +216,7 @@ final class BrowserModel: ObservableObject {
         }
         hint = segmented
             ? "Flux segmenté : XGrab transmettra la page, pas le fichier."
-            : "Media détecté : \(media.lastPathComponent.prefix(60))"
+            : "Media détecté : \((media as NSString).lastPathComponent.prefix(60))"
     }
 
     // ---------------------------------------------------------------- injection
