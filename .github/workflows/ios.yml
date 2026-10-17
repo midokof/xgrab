@@ -134,18 +134,23 @@ jobs:
             -authenticationKeyPath "$RUNNER_TEMP/keys/AuthKey_${KEY_ID}.p8"
 
       - name: Publish the build log
-        # Sans authentification, l'API des logs est inaccessible : on commit
-        # le journal dans le depot pour pouvoir le lire localement.
+        # L'API des logs exige une authentification : on pousse le journal
+        # dans une branche dediee pour pouvoir le lire sans jeton.
         if: always()
         run: |
           mkdir -p ci
-          tail -n 400 "$RUNNER_TEMP/xcodebuild.log" > ci/xcodebuild.log 2>/dev/null \
-            || echo "pas de journal" > ci/xcodebuild.log
+          if [ -f "$RUNNER_TEMP/xcodebuild.log" ]; then
+            cp "$RUNNER_TEMP/xcodebuild.log" ci/xcodebuild.log
+          else
+            { echo "LOG ABSENT dans $RUNNER_TEMP";
+              ls -la "$RUNNER_TEMP"; } > ci/xcodebuild.log
+          fi
+          wc -c ci/xcodebuild.log
           git config user.name "ci"
           git config user.email "ci@local"
-          git add ci/xcodebuild.log
-          git commit -m "ci: journal du build" || true
-          git push origin HEAD:main || true
+          git add -f ci/xcodebuild.log
+          git commit -m "ci: journal du build" --allow-empty
+          git push --force origin HEAD:refs/heads/ci-log
 
       - name: Upload the IPA
         uses: actions/upload-artifact@v4
