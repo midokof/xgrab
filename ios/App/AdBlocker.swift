@@ -101,7 +101,8 @@ enum AdBlocker {
                 encodedContentRuleList: json
             ) { list, error in
                 guard let list = list else {
-                    CrashLog.step("AdBlocker: natif indisponible, JS actif \(error?.localizedDescription ?? "")")
+                    let ns = error as NSError?
+                    CrashLog.step("AdBlocker: natif KO domaine=\(ns?.domain ?? "?") code=\(ns?.code ?? -1)")
                     return
                 }
                 DispatchQueue.main.async {

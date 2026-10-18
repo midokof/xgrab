@@ -761,14 +761,16 @@ private extension BrowserModel {
         const url = sourceOf(video);
         if (!url) { drop(); return; }
 
-        const slot = slotFor(video);
-
-        if (buttonFor === video && button.parentElement === slot.host) {
+        // Le bouton est pose une seule fois. Le deplacer a chaque rapport
+        // ferait vibrer la page : on se contente de remetre l'etiquette a jour.
+        if (button && button.isConnected && buttonFor === video) {
           const text = button.querySelector('span');
           if (text) text.textContent = 'Télécharger' + (label(video) ? ' ' + label(video) : '');
           return;
         }
         drop();
+
+        const slot = slotFor(video);
         window.webkit.messageHandlers.xgrab.postMessage({
           event: 'button',
           state: 'placed',
@@ -823,6 +825,9 @@ private extension BrowserModel {
         if (button && button.parentElement) button.remove();
         button = null;
         buttonFor = null;
+        // Le retrait vient de nous : on laisse l'observateur respirer.
+        window.__xgrabBusy = true;
+        setTimeout(function () { window.__xgrabBusy = false; }, 0);
       }
 
       function report() {
@@ -870,20 +875,42 @@ private extension BrowserModel {
         report();
       };
 
-      new MutationObserver(function () {
+      // Nos propres insertions doivent etre ignorees : sinon l'observateur
+      // relance la sonde, qui recree le bouton, qui relance l'observateur.
+      // La page se met a vibrer et le clic sur la video devient impossible.
+      function isOurs(nodes) {
+        for (var i = 0; i < nodes.length; i++) {
+          const n = nodes[i];
+          if (!n || n.nodeType !== 1) continue;
+          if (n.hasAttribute && n.hasAttribute('data-xgrab-ui')) return true;
+          if (n.querySelector && n.querySelector('[data-xgrab-ui]')) return true;
+        }
+        return false;
+      }
+
+      new MutationObserver(function (records) {
+        if (window.__xgrabBusy) return;
+        let foreign = false;
+        for (let i = 0; i < records.length; i++) {
+          if (!isOurs(records[i].addedNodes)) { foreign = true; break; }
+        }
+        if (!foreign) return;
         clearTimeout(window.__xgrabTimer);
-        window.__xgrabTimer = setTimeout(report, 400);
+        window.__xgrabTimer = setTimeout(report, 600);
       }).observe(document.documentElement, { childList: true, subtree: true });
 
       // Un flux peut etre injecte par attribut sans changer le DOM : on
       // surveille aussi les attributs src des <video> et <source>.
       new MutationObserver(function (records) {
         for (const r of records) {
-          if (r.type === 'attributes') report();
+          if (r.type === 'attributes' && r.target &&
+              r.target.hasAttribute && r.target.hasAttribute('data-xgrab-ui')) continue;
+          report();
+          return;
         }
       }).observe(document.documentElement, {
         attributes: true,
-        attributeFilter: ['src', 'currentSrc'],
+        attributeFilter: ['src'],
         subtree: true,
       });
 
