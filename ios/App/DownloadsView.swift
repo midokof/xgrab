@@ -65,13 +65,14 @@ struct DownloadsView: View {
     }
 
     private var summary: String {
-        guard !store.jobs.isEmpty else { return "Aucun téléchargement" }
+        let build = BrowserModel.buildLabel
+        guard !store.jobs.isEmpty else { return "\(build) · Aucun téléchargement" }
         let done = finished.count
         let bytes = finished.reduce(Int64(0)) { $0 + $1.bytes }
         if active.isEmpty && failed.isEmpty {
-            return "\(done) fichier\(done > 1 ? "s" : "") · \(human(bytes))"
+            return "\(build) · \(done) fichier\(done > 1 ? "s" : "") · \(human(bytes))"
         }
-        var parts: [String] = []
+        var parts: [String] = [build]
         if !active.isEmpty { parts.append("\(active.count) en cours") }
         if done > 0 { parts.append("\(done) terminé\(done > 1 ? "s" : "")") }
         if !failed.isEmpty { parts.append("\(failed.count) échec\(failed.count > 1 ? "s" : "")") }

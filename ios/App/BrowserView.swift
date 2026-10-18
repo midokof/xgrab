@@ -164,6 +164,14 @@ private struct WebViewRepresentable: UIViewRepresentable {
         // Le blocage JavaScript ne depend d'aucun stockage : il est toujours
         // present, contrairement au bloqueur natif.
         config.userContentController.addUserScript(AdBlocker.blocker())
+        // La sonde est enregistree comme script de document : elle attend
+        // ainsi le <video> depuis sa creation, au lieu d'apparaitre apres
+        // didFinish, qui peut ne jamais survenir sur une page video.
+        config.userContentController.addUserScript(
+            WKUserScript(source: BrowserModel.probe,
+                         injectionTime: .atDocumentStart,
+                         forMainFrameOnly: false)
+        )
         AdBlocker.installNative(into: config.userContentController)
 
         // Un cadre non nul evite l'ecran blanc sur les WKWebView crees hors
@@ -205,10 +213,16 @@ private struct WebViewRepresentable: UIViewRepresentable {
         // MARK: navigation
 
         func webView(_ web: WKWebView, didStartProvisionalNavigation nav: WKNavigation!) {
+            CrashLog.step("nav: depart \(model.address.prefix(60))")
             model.loading = true
         }
 
+        func webView(_ web: WKWebView, didCommit navigation: WKNavigation!) {
+            CrashLog.step("nav: commit")
+        }
+
         func webView(_ web: WKWebView, didFinish navigation: WKNavigation!) {
+            CrashLog.step("nav: fini")
             model.loading = false
             model.canGoBack = web.canGoBack
             model.inject()
@@ -305,6 +319,15 @@ final class BrowserModel: ObservableObject {
 
     private static let startPage = "https://duckduckgo.com"
 
+    /// Affiche le numero de build dans l'onglet Fichiers : sans cela, on
+    /// ne sait jamais quelle version est reellement installee.
+    static var buildLabel: String {
+        let info = Bundle.main.infoDictionary ?? [:]
+        let marketing = info["CFBundleShortVersionString"] as? String ?? "?"
+        let build = info["CFBundleVersion"] as? String ?? "?"
+        return "v\(marketing) (\(build))"
+    }
+
     // ------------------------------------------------------------- navigation
 
     func attach(_ web: WKWebView) {
@@ -345,9 +368,18 @@ final class BrowserModel: ObservableObject {
             let value = body["url"] as? String ?? ""
             if value != shown { shown = value; address = value }
         case "media":
-            mediaURL = body["media"] as? String
+            let found = body["media"] as? String
+            let video = (body["hasVideo"] as? Bool) ?? false
+            // Une seule ligne par etat nouveau : le journal reste lisible.
+            if video && !hasVideo {
+                CrashLog.step("media: <video> detecte")
+            }
+            if found != nil && mediaURL == nil {
+                CrashLog.step("media: flux \(found!.prefix(70))")
+            }
+            mediaURL = found
             segmented = (body["segmented"] as? Bool) ?? false
-            hasVideo = (body["hasVideo"] as? Bool) ?? false
+            hasVideo = video
             hasMedia = mediaURL != nil
             updateHint()
         default:
@@ -435,13 +467,18 @@ final class BrowserModel: ObservableObject {
             .joined(separator: "; ")
     }
 
+    /// Relit l'URL du document. La sonde elle-meme est deja enregistree
+    /// comme script de document ; cet appel ne sert qu'a resynchroniser
+    /// apres une navigation interne.
     func inject() {
-        web?.evaluateJavaScript(Self.probe, completionHandler: nil)
+        web?.evaluateJavaScript("window.__xgrabProbe && window.__xgrabProbe();",
+                               completionHandler: nil)
     }
 
     /// Ajoute le script de detection. Identique en esprit a content.js, mais
     /// declenche par l'app au lieu d'etre enregistre par le navigateur.
-    private static let probe = """
+    /// Sonde de detection, enregistree comme script de document.
+    static let probe = """
     (function () {
       if (window.__xgrabProbe) { window.__xgrabProbe(); return; }
 
