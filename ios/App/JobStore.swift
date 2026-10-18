@@ -1,163 +1,120 @@
 import Foundation
 
 enum JobState: String, Codable {
-    case queued
-    case running
-    case done
-    case failed
+    case queued, running, done, failed
 }
 
-struct Job: Codable, Identifiable, Equatable {
+struct Job: Codable, Identifiable {
     let id: String
-    let url: String
-    let referer: String
+    var url: String
+    var referer: String
     var filename: String
     var state: JobState
     var progress: Double
     var bytes: Int64
     var error: String?
     var localPath: String?
-    var isHLS: Bool
 
-    var addedAt: Date
-
-    /// Hauteur en pixels demandee au moment du lancement. Sert a choisir la
-    /// bonne variante HLS et a nommer le fichier.
+    /// Hauteur demandee au clic, sert a nommer le fichier et a choisir la
+    /// variante HLS.
     var height: Int?
 
-    /// Conserves pour pouvoir rejouer la requete : les CDN protegent
-    /// souvent le fichier par le User-Agent et les cookies de session.
+    /// Conserves pour rejouer la requete : les CDN protegent le fichier par
+    /// l'User-Agent et les cookies de session.
     var userAgent: String?
     var cookies: String?
 
     var isActive: Bool { state == .queued || state == .running }
+    var isSegmented: Bool { DownloadEngine.isHLS(url) }
 }
 
-/// Liste des telechargements, partagee entre le handler natif et l'interface.
+/// Liste des telechargements.
+///
+/// Un seul point de verite : le moteur de telechargement y ecrit, l'interface
+/// y lit. Aucun second stockage, donc aucune desynchronisation possible.
+@MainActor
 final class JobStore: ObservableObject {
     static let shared = JobStore()
 
-    /// Conteneur partage quand il existe, sinon le dossier Documents de
-    /// l'app : sans l'extension, le groupe n'est plus garanti.
-    static var containerURL: URL? {
-        if let shared = FileManager.default
-            .containerURL(forSecurityApplicationGroupIdentifier: "group.app.xgrab") {
-            return shared
-        }
-        return FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first
-    }
-
-    static var storeURL: URL? {
-        containerURL?.appendingPathComponent("jobs.json")
-    }
-
     @Published private(set) var jobs: [Job] = []
 
-    private let queue = DispatchQueue(label: "app.xgrab.store")
-    private let key = "jobStore.didLoad"
-
-    private init() {
-        load()
+    private var fileURL: URL? {
+        FileManager.default
+            .urls(for: .documentDirectory, in: .userDomainMask)
+            .first?
+            .appendingPathComponent("jobs.json")
     }
+
+    private init() { load() }
 
     // ------------------------------------------------------------- persistance
 
-    /// Relit le fichier. Le drapeau `didLoad` est remis a zero pour ne pas
-    /// bloquer une relecture explicite.
-    func reload() {
-        UserDefaults.standard.set(false, forKey: key)
-        load()
-        UserDefaults.standard.set(true, forKey: key)
-    }
-
     private func load() {
-        guard !UserDefaults.standard.bool(forKey: key) else { return }
-        UserDefaults.standard.set(true, forKey: key)
-
-        guard let url = Self.storeURL, let data = try? Data(contentsOf: url) else { return }
+        guard let url = fileURL, let data = try? Data(contentsOf: url) else { return }
         let decoder = JSONDecoder()
         decoder.dateDecodingStrategy = .iso8601
         if let decoded = try? decoder.decode([Job].self, from: data) {
-            publish(decoded)
+            // Un telechargement interrompu par la fermeture de l'app n'a pas
+            // de raison d'echouer silencieusement : il est repris.
+            jobs = decoded.map { job in
+                var copy = job
+                if copy.isActive { copy.state = .queued; copy.progress = 0 }
+                return copy
+            }
         }
     }
 
-    private func persist(_ snapshot: [Job]) {
-        queue.async {
-            guard let url = JobStore.storeURL,
-                  let data = try? JSONEncoder().encode(snapshot) else { return }
-            try? data.write(to: url, options: .atomic)
-        }
+    private func persist() {
+        guard let url = fileURL,
+              let data = try? JSONEncoder().encode(jobs) else { return }
+        try? data.write(to: url, options: .atomic)
     }
 
-    private func publish(_ value: [Job]) {
-        if Thread.isMainThread {
-            jobs = value
-        } else {
-            DispatchQueue.main.async { self.jobs = value }
-        }
-    }
+    // ------------------------------------------------------------------- api
 
-    // ------------------------------------------------------------------ lecture
+    func job(id: String) -> Job? { jobs.first { $0.id == id } }
 
-    func job(id: String) -> Job? {
-        jobs.first { $0.id == id }
-    }
-
-    var activeCount: Int {
-        jobs.filter(\.isActive).count
-    }
-
-    // ------------------------------------------------------------------ ecriture
+    var activeCount: Int { jobs.filter(\.isActive).count }
 
     @discardableResult
-    func enqueue(url: String,
-                 referer: String,
-                 userAgent: String? = nil,
-                 cookies: String? = nil,
-                 filename: String? = nil,
-                 height: Int? = nil) -> Job {
+    func add(url: String,
+             referer: String,
+             userAgent: String?,
+             cookies: String?,
+             filename: String,
+             height: Int?) -> Job {
         let job = Job(
             id: UUID().uuidString,
             url: url,
             referer: referer,
-            filename: filename ?? Downloader.filename(for: url),
+            filename: filename,
             state: .queued,
             progress: 0,
             bytes: 0,
             error: nil,
             localPath: nil,
-            isHLS: Downloader.isHLS(url),
-            addedAt: Date(),
             height: height,
             userAgent: userAgent,
             cookies: cookies
         )
-        apply { $0.insert(job, at: 0) }
+        jobs.insert(job, at: 0)
+        persist()
         return job
     }
 
     func update(id: String, _ change: (inout Job) -> Void) {
-        apply { list in
-            guard let index = list.firstIndex(where: { $0.id == id }) else { return }
-            change(&list[index])
-        }
+        guard let index = jobs.firstIndex(where: { $0.id == id }) else { return }
+        change(&jobs[index])
+        persist()
     }
 
     func remove(id: String) {
-        apply { list in
-            list.removeAll { $0.id == id }
-        }
+        jobs.removeAll { $0.id == id }
+        persist()
     }
 
     func removeAll() {
-        apply { $0.removeAll() }
-    }
-
-    private func apply(_ mutate: (inout [Job]) -> Void) {
-        var copy = jobs
-        mutate(&copy)
-        persist(copy)
-        publish(copy)
+        jobs.removeAll()
+        persist()
     }
 }

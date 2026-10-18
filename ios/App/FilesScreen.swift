@@ -1,12 +1,12 @@
 import SwiftUI
 
-struct DownloadsView: View {
-    @ObservedObject private var store = JobStore.shared
+struct FilesScreen: View {
+    @ObservedObject var store: JobStore
     @State private var showDiagnostic = false
 
-    private var active: [Job] { store.jobs.filter { $0.state == .running || $0.state == .queued } }
-    private var finished: [Job] { store.jobs.filter { $0.state == .done } }
+    private var running: [Job] { store.jobs.filter(\.isActive) }
     private var failed: [Job] { store.jobs.filter { $0.state == .failed } }
+    private var done: [Job] { store.jobs.filter { $0.state == .done } }
 
     var body: some View {
         ZStack {
@@ -14,15 +14,14 @@ struct DownloadsView: View {
 
             VStack(spacing: 0) {
                 header
-
                 if store.jobs.isEmpty {
                     empty
                 } else {
                     ScrollView {
                         VStack(spacing: 12) {
-                            if !active.isEmpty { section("En cours", items: active) }
-                            if !failed.isEmpty { section("Échecs", items: failed) }
-                            if !finished.isEmpty { section("Terminés", items: finished) }
+                            if !running.isEmpty { section("En cours", running) }
+                            if !failed.isEmpty { section("Échecs", failed) }
+                            if !done.isEmpty { section("Terminés", done) }
                         }
                         .padding(.horizontal, Theme.gutter)
                         .padding(.bottom, 90)
@@ -33,25 +32,15 @@ struct DownloadsView: View {
         .sheet(isPresented: $showDiagnostic) { DiagnosticView() }
     }
 
-    // --------------------------------------------------------------- en-tete
-
     private var header: some View {
-        ScreenHeader(title: "Fichiers", subtitle: summary) {
+        ScreenHeader(title: "Fichiers", subtitle: subtitle) {
             Menu {
-                Button {
-                    store.reload()
-                } label: {
-                    Label("Actualiser", systemImage: "arrow.clockwise")
-                }
-                Button {
-                    showDiagnostic = true
-                } label: {
+                Button { showDiagnostic = true } label: {
                     Label("Diagnostic", systemImage: "stethoscope")
                 }
                 if !store.jobs.isEmpty {
-                    Divider()
                     Button(role: .destructive) {
-                        for job in store.jobs { Downloader.shared.delete(jobID: job.id) }
+                        for job in store.jobs { DownloadEngine.shared.delete(jobID: job.id) }
                     } label: {
                         Label("Tout effacer", systemImage: "trash")
                     }
@@ -64,70 +53,62 @@ struct DownloadsView: View {
         }
     }
 
-    private var summary: String {
-        let build = BrowserModel.buildLabel
-        guard !store.jobs.isEmpty else { return "\(build) · Aucun téléchargement" }
-        let done = finished.count
-        let bytes = finished.reduce(Int64(0)) { $0 + $1.bytes }
-        if active.isEmpty && failed.isEmpty {
-            return "\(build) · \(done) fichier\(done > 1 ? "s" : "") · \(human(bytes))"
+    private var subtitle: String {
+        let total = done.reduce(Int64(0)) { $0 + $1.bytes }
+        var parts = [BrowserModel.buildLabel]
+        if running.isEmpty && failed.isEmpty {
+            parts.append(done.isEmpty ? "Aucun téléchargement" : "\(done.count) fichier\(done.count > 1 ? "s" : "")")
+        } else {
+            if !running.isEmpty { parts.append("\(running.count) en cours") }
+            if !failed.isEmpty { parts.append("\(failed.count) échec\(failed.count > 1 ? "s" : "")") }
         }
-        var parts: [String] = [build]
-        if !active.isEmpty { parts.append("\(active.count) en cours") }
-        if done > 0 { parts.append("\(done) terminé\(done > 1 ? "s" : "")") }
-        if !failed.isEmpty { parts.append("\(failed.count) échec\(failed.count > 1 ? "s" : "")") }
+        if total > 0 { parts.append(Self.measure(total)) }
         return parts.joined(separator: " · ")
     }
 
-    // ---------------------------------------------------------------- corps
+    // ------------------------------------------------------------------ corps
 
-    @ViewBuilder
-    private func section(_ title: String, items: [Job]) -> some View {
+    private func section(_ title: String, _ items: [Job]) -> some View {
         VStack(alignment: .leading, spacing: 8) {
             Text(title).sectionLabel()
-            ForEach(items) { job in card(job) }
+            ForEach(items) { card($0) }
         }
     }
 
     private func card(_ job: Job) -> some View {
         VStack(alignment: .leading, spacing: 10) {
             HStack(alignment: .top, spacing: 10) {
-                icon(job)
+                badge(job)
                 VStack(alignment: .leading, spacing: 3) {
                     Text(job.filename)
                         .font(.system(size: 14, weight: .semibold))
                         .lineLimit(2)
-                        .multilineTextAlignment(.leading)
                     if let error = job.error {
                         Text(error)
                             .font(.system(size: 11))
                             .foregroundStyle(Theme.danger)
                             .lineLimit(3)
                     } else if job.state == .done {
-                        Text(human(job.bytes))
-                            .font(.system(size: 11))
-                            .foregroundStyle(.secondary)
+                        Text(Self.measure(job.bytes)).font(.system(size: 11)).foregroundStyle(.secondary)
                     }
                 }
                 Spacer(minLength: 4)
-                badge(job)
+                pill(job)
             }
 
-            if job.state == .running || job.state == .queued {
+            if job.isActive {
                 ProgressTrack(value: job.progress)
-                Text("\(Int(job.progress * 100)) % · \(human(job.bytes))")
+                Text("\(Int(job.progress * 100)) % · \(Self.measure(job.bytes))")
                     .font(.system(size: 10))
                     .foregroundStyle(.secondary)
-            }
-
-            if job.state != .running && job.state != .queued {
+            } else {
                 actions(job)
             }
         }
         .cardSurface()
     }
 
-    private func icon(_ job: Job) -> some View {
+    private func badge(_ job: Job) -> some View {
         Image(systemName: symbol(job))
             .font(.system(size: 15, weight: .semibold))
             .foregroundStyle(.white)
@@ -153,7 +134,7 @@ struct DownloadsView: View {
         }
     }
 
-    private func badge(_ job: Job) -> some View {
+    private func pill(_ job: Job) -> some View {
         switch job.state {
         case .queued: StatusPill(title: "EN ATTENTE", colour: .secondary)
         case .running: StatusPill(title: "\(Int(job.progress * 100))%", colour: Theme.accent)
@@ -165,26 +146,30 @@ struct DownloadsView: View {
     @ViewBuilder
     private func actions(_ job: Job) -> some View {
         HStack(spacing: 8) {
-            if job.state == .failed {
-                Button { Downloader.shared.retry(jobID: job.id) } label: {
+            switch job.state {
+            case .failed:
+                Button { DownloadEngine.shared.retry(jobID: job.id) } label: {
                     chip("Réessayer", "arrow.clockwise", Theme.accent)
                 }
-                Button { Downloader.shared.forceWebKit(jobID: job.id) } label: {
-                    chip("WebKit", "safari", Theme.warning)
+            case .done:
+                if let path = job.localPath {
+                    ShareLink(item: URL(fileURLWithPath: path)) {
+                        chip("Enregistrer", "square.and.arrow.down", Theme.success)
+                    }
                 }
+            default:
+                EmptyView()
             }
-            if job.state == .done, let path = job.localPath {
-                ShareLink(item: URL(fileURLWithPath: path)) {
-                    chip("Enregistrer", "square.and.arrow.down", Theme.success)
-                }
-            }
-            if job.state == .running || job.state == .queued {
-                Button { Downloader.shared.cancel(jobID: job.id) } label: {
+
+            if job.isActive {
+                Button { DownloadEngine.shared.cancel(jobID: job.id) } label: {
                     chip("Annuler", "xmark", .secondary)
                 }
             }
+
             Spacer()
-            Button { Downloader.shared.delete(jobID: job.id) } label: {
+
+            Button { DownloadEngine.shared.delete(jobID: job.id) } label: {
                 Image(systemName: "trash")
                     .font(.system(size: 12, weight: .semibold))
                     .foregroundStyle(Theme.danger)
@@ -212,7 +197,7 @@ struct DownloadsView: View {
                 .foregroundStyle(Theme.accent.opacity(0.35))
             Text("Aucun téléchargement")
                 .font(.system(size: 17, weight: .bold, design: .rounded))
-            Text("Ouvre l'onglet Navigateur,\ncolle un lien et appuie sur Télécharger.")
+            Text("Ouvre l'onglet Navigateur, colle un lien\net appuie sur Télécharger sous la vidéo.")
                 .font(.system(size: 13))
                 .multilineTextAlignment(.center)
                 .foregroundStyle(.secondary)
@@ -221,7 +206,7 @@ struct DownloadsView: View {
         .frame(maxWidth: .infinity)
     }
 
-    private func human(_ bytes: Int64) -> String {
+    static func measure(_ bytes: Int64) -> String {
         guard bytes > 0 else { return "0 o" }
         let units = ["o", "Ko", "Mo", "Go"]
         var value = Double(bytes)

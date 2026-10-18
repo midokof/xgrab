@@ -2,8 +2,8 @@ import SwiftUI
 import UIKit
 
 final class AppDelegate: NSObject, UIApplicationDelegate {
-    /// Installe le journal de crash avant tout le reste : une erreur
-    /// fatale survenue ensuite laisse une trace de la derniere etape.
+    /// Installe le journal avant tout le reste : une erreur fatale survenue
+    /// ensuite laisse une trace de la derniere etape.
     override init() {
         super.init()
         CrashLog.install()
@@ -17,100 +17,19 @@ final class AppDelegate: NSObject, UIApplicationDelegate {
         handleEventsForBackgroundURLSession identifier: String,
         completionHandler: @escaping () -> Void
     ) {
-        Downloader.shared.backgroundCompletionHandler = completionHandler
+        Task { @MainActor in
+            DownloadEngine.shared.backgroundCompletionHandler = completionHandler
+        }
     }
 }
 
 @main
 struct XGrabApp: App {
     @UIApplicationDelegateAdaptor(AppDelegate.self) private var delegate
-    @State private var tab: Tab = .browser
-
-    enum Tab: String, CaseIterable {
-        case browser, files
-
-        var title: String {
-            switch self {
-            case .browser: return "Navigateur"
-            case .files: return "Fichiers"
-            }
-        }
-
-        var symbol: String {
-            switch self {
-            case .browser: return "safari.fill"
-            case .files: return "arrow.down.doc.fill"
-            }
-        }
-    }
 
     var body: some Scene {
         WindowGroup {
-            ZStack(alignment: .bottom) {
-                // Les deux vues restent montees en permanence. Un `switch`
-                // retirerait le WKWebView de la hierarchie : iOS le
-                // reafficherait en blanc au retour sur l'onglet.
-                DownloadsView()
-                    .opacity(tab == .files ? 1 : 0)
-                    .allowsHitTesting(tab == .files)
-                    .accessibilityHidden(tab != .files)
-
-                BrowserView()
-                    .opacity(tab == .browser ? 1 : 0)
-                    .allowsHitTesting(tab == .browser)
-                    .accessibilityHidden(tab != .browser)
-
-                tabBar
-            }
-            .ignoresSafeArea(.keyboard, edges: .bottom)
+            RootView()
         }
-    }
-
-    private var tabBar: some View {
-        HStack(spacing: 4) {
-            ForEach(Tab.allCases, id: \.rawValue) { item in
-                tabButton(item)
-            }
-        }
-        .padding(5)
-        .background(
-            RoundedRectangle(cornerRadius: 20, style: .continuous)
-                .fill(.ultraThinMaterial)
-        )
-        .overlay(
-            RoundedRectangle(cornerRadius: 20, style: .continuous)
-                .strokeBorder(Color.primary.opacity(0.08), lineWidth: 1)
-        )
-        .shadow(color: .black.opacity(0.14), radius: 16, y: 6)
-        .padding(.horizontal, 60)
-        .padding(.bottom, 8)
-    }
-
-    private func tabButton(_ item: Tab) -> some View {
-        let selected: Bool = tab == item
-        let tint: Color = selected ? .white : .secondary
-
-        return Button {
-            withAnimation(.spring(response: 0.32, dampingFraction: 0.78)) {
-                tab = item
-            }
-        } label: {
-            VStack(spacing: 4) {
-                Image(systemName: item.symbol)
-                    .font(.system(size: 17, weight: .semibold))
-                Text(item.title)
-                    .font(.system(size: 10, weight: .semibold))
-            }
-            .frame(maxWidth: .infinity)
-            .padding(.vertical, 9)
-            .background(background(selected: selected))
-            .foregroundStyle(tint)
-        }
-        .buttonStyle(.plain)
-    }
-
-    private func background(selected: Bool) -> some View {
-        RoundedRectangle(cornerRadius: 13, style: .continuous)
-            .fill(selected ? AnyShapeStyle(Theme.accentGradient) : AnyShapeStyle(Color.clear))
     }
 }

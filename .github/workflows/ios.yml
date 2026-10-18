@@ -99,9 +99,7 @@ jobs:
           echo "CFBundleExecutable = $exe"
           test -f "$app/$exe" || { echo "EXECUTABLE ABSENT : $app/$exe"; exit 1; }
 
-          test -f "$app/blockerList.json" \
-            || { echo "LISTE DE REGLETS ABSENTE"; exit 1; }
-          echo "blockerList.json = $(wc -c < "$app/blockerList.json") octets"
+          test -f "$app/Info.plist" || { echo "Info.plist ABSENT"; exit 1; }
 
           if [ -d "$app/PlugIns" ]; then
             echo "ATTENTION : des extensions sont encore embarquees :"
