@@ -720,15 +720,50 @@ private extension BrowserModel {
         return h > 0 ? h + 'p' : '';
       }
 
+      // Trouve l'element apres lequel inserer le bouton pour qu'il se
+      // retrouve SOUS la video, jamais dessus.
+      //
+      // Deux pieges courants :
+      //  * le lecteur est en position absolute dans un conteneur de sa
+      //    exacte taille : tout frere inserere ici tombe sur l'image ;
+      //  * le conteneur est lui-meme absolu, fixe, ou masque par overflow.
+      // On remonte alors d'un cran, jusqu'a trouver un ancetre ou il reste
+      // reellement de la place en dessous.
+      function slotFor(video) {
+        const rect = video.getBoundingClientRect();
+        let node = video;
+        let host = video.parentElement;
+        let depth = 0;
+
+        while (host && host !== document.body && depth < 10) {
+          const hs = window.getComputedStyle(host);
+          const ns = window.getComputedStyle(node);
+          const hr = host.getBoundingClientRect();
+
+          const detached = ns.position === 'absolute' || ns.position === 'fixed';
+          const hostFixed = hs.position === 'absolute' || hs.position === 'fixed';
+          const clipped = hs.overflow === 'hidden' || hs.overflowY === 'hidden';
+          // Le conteneur ne fait pas plus grand que le lecteur : aucune
+          // place pour un bouton dessous.
+          const noRoom = hr.height <= rect.height + 12 || hr.width <= rect.width + 12;
+
+          if (!detached && !hostFixed && !clipped && !noRoom) {
+            return { host: host, node: node };
+          }
+          node = host;
+          host = host.parentElement;
+          depth++;
+        }
+        return { host: host || document.body, node: node };
+      }
+
       function place(video) {
         const url = sourceOf(video);
         if (!url) { drop(); return; }
 
-        const parent = video.parentElement;
-        if (!parent) { drop(); return; }
-        const host = parent.tagName === 'A' ? (parent.parentElement || parent) : parent;
+        const slot = slotFor(video);
 
-        if (buttonFor === video && button.parentElement === host) {
+        if (buttonFor === video && button.parentElement === slot.host) {
           const text = button.querySelector('span');
           if (text) text.textContent = 'Télécharger' + (label(video) ? ' ' + label(video) : '');
           return;
@@ -742,17 +777,20 @@ private extension BrowserModel {
 
         const box = document.createElement('div');
         box.setAttribute('data-xgrab-ui', '1');
-        box.style.cssText = 'margin:10px auto;display:block;width:max-content;' +
-                            'font-family:-apple-system,system-ui,sans-serif;';
+        box.style.cssText = 'margin:12px 0;display:block;width:max-content;' +
+                            'max-width:100%;font-family:-apple-system,system-ui,sans-serif;' +
+                            'position:relative;z-index:2147483000;';
 
         const btn = document.createElement('button');
         btn.type = 'button';
+        btn.setAttribute('data-xgrab-ui', '1');
         btn.style.cssText = [
           'display:inline-flex', 'align-items:center', 'gap:8px',
           'padding:10px 20px', 'border:0', 'border-radius:999px',
           'background:linear-gradient(135deg,#4d90fe,#2f5bb7)',
           'color:#fff', 'font-size:14px', 'font-weight:700',
           'cursor:pointer', 'box-shadow:0 6px 18px rgba(77,144,254,.45)',
+          'position:relative', 'z-index:2147483000', 'pointer-events:auto',
         ].join(';');
 
         const text = document.createElement('span');
@@ -775,7 +813,8 @@ private extension BrowserModel {
         }, true);
 
         box.appendChild(btn);
-        host.insertBefore(box, video.nextSibling);
+        // Apres le sous-arbre du lecteur : le bouton tombe donc en dessous.
+        slot.host.insertBefore(box, slot.node.nextSibling);
         buttonFor = video;
         button = box;
       }
