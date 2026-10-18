@@ -422,7 +422,7 @@ struct Candidate: Identifiable {
     /// Derniere erreur de la sonde, affichee dans l'interface.
     @Published private(set) var probeError: String?
     /// "natif", "JS" ou "désactivé".
-    @Published private(set) var blockerMode = "JS"
+    @Published var blockerMode = "JS"
     @Published private(set) var blockerOn = AdBlocker.isEnabled
 
     /// Coupe ou relance le bloqueur sans reinstaller l'app.
