@@ -1,4 +1,4 @@
-name: Build iOS
+﻿name: Build iOS
 
 on:
   workflow_dispatch:
@@ -87,7 +87,7 @@ jobs:
           echo "$app" > "$RUNNER_TEMP/app-path"
           ls -la "$app"
 
-- name: Verify the bundle metadata
+      - name: Verify the bundle metadata
         # installd refuse un bundle dont CFBundleExecutable ne correspond pas
         # a un fichier reellement present : on le verifie ici plutot que sur
         # le telephone. On verifie aussi que le blocage des publicites est bien
