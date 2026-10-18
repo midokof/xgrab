@@ -32,6 +32,11 @@ final class BrowserModel: NSObject, ObservableObject {
     @Published private(set) var tracks: [Track] = []
     @Published private(set) var adCount = 0
     @Published private(set) var buttonPlaced = false
+    /// Combien de balises <video> la page contient, et combien ont expose une
+    /// URL exploitable. C'est le couple qui dit immediatement pourquoi le
+    /// bouton est absent.
+    @Published private(set) var seen = 0
+    @Published private(set) var resolved = 0
     @Published private(set) var failure: String?
     @Published private(set) var blocking = true
     @Published var pickedURL: String?
@@ -287,6 +292,9 @@ extension BrowserModel: WKScriptMessageHandler {
         case "placed":
             Task { @MainActor in buttonPlaced = true }
 
+        case "hooked":
+            CrashLog.step("flux MSE detecte : \((body["manifest"] as? String ?? "").prefix(60))")
+
         case "download":
             Task { @MainActor in
                 guard let url = body["url"] as? String else { return }
@@ -328,6 +336,8 @@ extension BrowserModel: WKScriptMessageHandler {
         }
         tracks = found
         adCount = (body["ads"] as? Int) ?? 0
+        seen = (body["seen"] as? Int) ?? 0
+        resolved = (body["resolved"] as? Int) ?? 0
         buttonPlaced = body["empty"] as? Bool != true && !found.isEmpty
 
         // Un choix manuel reste valable tant que son flux est propose.
@@ -349,7 +359,9 @@ extension BrowserModel: WKScriptMessageHandler {
             let ads = adCount > 0 ? " · \(adCount) pub\(adCount > 1 ? "s" : "") écartée\(adCount > 1 ? "s" : "")" : ""
             message = "\(tracks.count) vidéos détectées\(ads) · \(track.height)p retenue"
         default:
-            message = nil
+            message = seen == 0
+                ? "Aucune balise vidéo sur cette page"
+                : "\(seen) lecteur\(seen > 1 ? "s" : "") trouvé\(seen > 1 ? "s" : "") mais aucune URL lisible (MSE ?)"
         }
     }
 }

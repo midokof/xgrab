@@ -88,8 +88,10 @@ struct BrowserScreen: View {
 
             let count = model.tracks.count
             StatusPill(
-                title: count == 0 ? "AUCUNE VIDÉO" : "\(count) VIDÉO\(count > 1 ? "S" : "")",
-                colour: count == 0 ? .secondary : Theme.accent
+                title: model.seen == 0
+                    ? "0 VIDÉO"
+                    : "\(count)/\(model.seen) VIDÉO\(model.seen > 1 ? "S" : "")",
+                colour: count == 0 ? Theme.warning : Theme.accent
             )
 
             if model.buttonPlaced {

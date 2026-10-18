@@ -139,6 +139,7 @@ enum PageScript {
             var MEDIA = /\\.(m3u8|mp4|m4v|webm|mov|mkv)(\\?|#|$)/i;
 
             var recent = [];
+            var manifests = [];
             var button = null;
             var buttonFor = null;
             var target = null;   // lecteur retenu : ne change plus
@@ -168,16 +169,45 @@ enum PageScript {
               return !!u && /^https?:\\/\\//i.test(u) && !/^blob:/i.test(u);
             }
 
+            // Un lecteur HLS passe par MediaSource : `currentSrc` vaut "blob:"
+            // et l'URL reelle n'apparait dans aucune balise. Elle est fournie
+            // a addSourceBuffer, seul endroit ou elle existe. Sans cette
+            // capture, aucun bouton n'apparait sur les flux segmentes.
+            try {
+              var original = MediaSource.prototype.addSourceBuffer;
+              MediaSource.prototype.addSourceBuffer = function () {
+                try {
+                  var source = arguments[0];
+                  if (typeof source === 'string' && /^https?:\\/\\//i.test(source) &&
+                      !/^blob:/i.test(source)) {
+                    if (manifests.indexOf(source) === -1) manifests.unshift(source);
+                    if (manifests.length > 5) manifests.pop();
+                    if (!window.__xgrabHooked) {
+                      window.__xgrabHooked = true;
+                      post({ event: 'hooked', manifest: source });
+                    }
+                  }
+                } catch (e) {}
+                return original.apply(this, arguments);
+              };
+            } catch (e) {}
+
             function sourceOf(video) {
               var direct = video.currentSrc || video.src || '';
               if (usable(direct)) return direct.split('#')[0];
+
               var nodes = video.querySelectorAll('source[src]');
               for (var i = 0; i < nodes.length; i++) {
                 var u = nodes[i].getAttribute('src') || '';
                 if (usable(u)) return u.split('#')[0];
               }
-              // Lecteur MSE : currentSrc vaut "blob:", on reprend alors la
-              // derniere URL reelle vue dans les requetes du document.
+
+              // Flux MSE : on rend le dernier manifeste monte, qui correspond
+              // au lecteur en cours de lecture.
+              if (manifests.length) return manifests[0].split('#')[0];
+
+              // Dernier recours : la derniere URL de media vue dans les
+              // requetes du document.
               for (var j = 0; j < recent.length; j++) {
                 if (Date.now() - recent[j].at < 45000) return recent[j].url;
               }
@@ -328,7 +358,8 @@ enum PageScript {
               var videos = Array.from(document.querySelectorAll('video'));
               if (!videos.length) {
                 drop(); target = null;
-                post({ event: 'scan', media: null, list: [], empty: true });
+                post({ event: 'scan', media: null, list: [], ads: 0,
+                       seen: 0, resolved: 0, manifests: manifests.length, empty: true });
                 return;
               }
 
@@ -367,6 +398,9 @@ enum PageScript {
                 media: url || null,
                 list: shown,
                 ads: entries.length - shown.length,
+                seen: videos.length,
+                resolved: entries.length,
+                manifests: manifests.length,
                 target: url
               });
             }
