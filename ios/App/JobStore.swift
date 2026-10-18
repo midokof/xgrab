@@ -25,7 +25,7 @@ struct Job: Codable, Identifiable {
     var cookies: String?
 
     var isActive: Bool { state == .queued || state == .running }
-    var isSegmented: Bool { DownloadEngine.isHLS(url) }
+    var isSegmented: Bool { MediaFile.isHLS(url) }
 }
 
 /// Liste des telechargements.

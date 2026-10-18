@@ -1,4 +1,5 @@
 import SwiftUI
+import WebKit
 
 struct BrowserScreen: View {
     @ObservedObject var model: BrowserModel
