@@ -39,7 +39,7 @@ enum AdBlocker {
             if let error {
                 CrashLog.step("AdBlocker: compilation echouee \(error.localizedDescription)")
             } else if let list {
-                CrashLog.step("AdBlocker: liste compilee (\(list.ruleCount) regles)")
+                CrashLog.step("AdBlocker: liste compilee")
                 cached = list
             }
             flush(list)

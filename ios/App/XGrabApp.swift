@@ -47,47 +47,27 @@ struct XGrabApp: App {
     var body: some Scene {
         WindowGroup {
             ZStack(alignment: .bottom) {
-                // Le navigateur occupe tout l'ecran : la barre se pose par-dessus.
-                Group {
-                    switch tab {
-                    case .browser: BrowserView()
-                    case .files: DownloadsView()
-                    }
-                }
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-
+                content
                 tabBar
-                    .padding(.horizontal, 60)
-                    .padding(.bottom, 8)
             }
             .ignoresSafeArea(.keyboard, edges: .bottom)
+        }
+    }
+
+    @ViewBuilder
+    private var content: some View {
+        switch tab {
+        case .browser:
+            BrowserView()
+        case .files:
+            DownloadsView()
         }
     }
 
     private var tabBar: some View {
         HStack(spacing: 4) {
             ForEach(Tab.allCases, id: \.rawValue) { item in
-                Button {
-                    withAnimation(.spring(response: 0.32, dampingFraction: 0.78)) {
-                        tab = item
-                    }
-                } label: {
-                    VStack(spacing: 4) {
-                        Image(systemName: item.symbol)
-                            .font(.system(size: 17, weight: .semibold))
-                        Text(item.title)
-                            .font(.system(size: 10, weight: .semibold))
-                    }
-                    .frame(maxWidth: .infinity)
-                    .padding(.vertical, 9)
-                    .background(
-                        RoundedRectangle(cornerRadius: 13, style: .continuous)
-                            .fill(tab == item ? Theme.accentGradient : Color.clear)
-                    )
-                    .foregroundStyle(tab == item ? .white : .secondary)
-                    .shadow(color: Theme.accent.opacity(tab == item ? 0.35 : 0), radius: 8, y: 4)
-                }
-                .buttonStyle(.plain)
+                tabButton(item)
             }
         }
         .padding(5)
@@ -100,5 +80,35 @@ struct XGrabApp: App {
                 .strokeBorder(Color.primary.opacity(0.08), lineWidth: 1)
         )
         .shadow(color: .black.opacity(0.14), radius: 16, y: 6)
+        .padding(.horizontal, 60)
+        .padding(.bottom, 8)
+    }
+
+    private func tabButton(_ item: Tab) -> some View {
+        let selected: Bool = tab == item
+        let tint: Color = selected ? .white : .secondary
+
+        return Button {
+            withAnimation(.spring(response: 0.32, dampingFraction: 0.78)) {
+                tab = item
+            }
+        } label: {
+            VStack(spacing: 4) {
+                Image(systemName: item.symbol)
+                    .font(.system(size: 17, weight: .semibold))
+                Text(item.title)
+                    .font(.system(size: 10, weight: .semibold))
+            }
+            .frame(maxWidth: .infinity)
+            .padding(.vertical, 9)
+            .background(background(selected: selected))
+            .foregroundStyle(tint)
+        }
+        .buttonStyle(.plain)
+    }
+
+    private func background(selected: Bool) -> some View {
+        RoundedRectangle(cornerRadius: 13, style: .continuous)
+            .fill(selected ? AnyShapeStyle(Theme.accentGradient) : AnyShapeStyle(Color.clear))
     }
 }
