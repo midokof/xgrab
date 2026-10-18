@@ -1,4 +1,4 @@
-import SwiftUI
+﻿import SwiftUI
 import WebKit
 
 /// Navigateur integre, bloqueur de publicites et de popups.
@@ -107,8 +107,45 @@ struct BrowserView: View {
                     .padding(.horizontal, Theme.gutter + 4)
                     .padding(.bottom, 2)
             }
+
+            chooser
         }
         .background(.bar)
+    }
+
+    /// Plusieurs lecteurs sur la page : l'utilisateur choisit lequel garder.
+    @ViewBuilder
+    private var chooser: some View {
+        let usable = model.candidates.filter { !$0.isAd && $0.url != model.chosenURL }
+        if !usable.isEmpty {
+            HStack(spacing: 6) {
+                Text("\(model.candidates.filter { !$0.isAd }.count) vidéos")
+                    .font(.system(size: 10, weight: .semibold))
+                    .foregroundStyle(.secondary)
+                Spacer()
+                Menu {
+                    ForEach(usable) { item in
+                        Button {
+                            model.pickedURL = item.url
+                        } label: {
+                            Label(item.label, systemImage: "film")
+                        }
+                    }
+                } label: {
+                    HStack(spacing: 4) {
+                        Text("Choisir").font(.system(size: 10, weight: .bold))
+                        Image(systemName: "chevron.up.chevron.down")
+                            .font(.system(size: 8, weight: .bold))
+                    }
+                    .padding(.horizontal, 9)
+                    .padding(.vertical, 4)
+                    .background(Capsule().fill(Theme.accent.opacity(0.16)))
+                    .foregroundStyle(Theme.accent)
+                }
+            }
+            .padding(.horizontal, Theme.gutter + 4)
+            .padding(.bottom, 4)
+        }
     }
 
     // ------------------------------------------------------------ bouton media
@@ -117,7 +154,7 @@ struct BrowserView: View {
     private var downloadButton: some View {
         if model.hasVideo {
             Button {
-                guard model.mediaURL != nil else {
+                guard model.chosenURL != nil else {
                     model.hint = "Démarre la lecture : le flux n'est pas encore chargé."
                     return
                 }
@@ -125,12 +162,12 @@ struct BrowserView: View {
                 model.download()
             } label: {
                 HStack(spacing: 10) {
-                    Image(systemName: model.mediaURL == nil
+                    Image(systemName: model.chosenURL == nil
                           ? "hourglass.circle.fill" : "arrow.down.circle.fill")
                         .font(.system(size: 20, weight: .semibold))
-                    Text(model.mediaURL == nil ? "Lecture requise" : "Télécharger la vidéo")
+                    Text(model.chosenURL == nil ? "Lecture requise" : "Télécharger la vidéo")
                         .font(.system(size: 15, weight: .bold))
-                    if model.segmented && model.mediaURL != nil {
+                    if model.segmented && model.chosenURL != nil {
                         Text("· flux")
                             .font(.system(size: 12, weight: .medium))
                             .opacity(0.8)
@@ -307,15 +344,35 @@ final class BrowserModel: ObservableObject {
     @Published var canGoBack = false
     @Published var hint: String?
 
-    /// URL de media trouvee sur la page courante.
+    /// Flux detecte sur la page. Une page de recherche porte presque toujours
+/// des lecteurs publicitaires : le choix automatique privilegie le contenu.
+struct Candidate: Identifiable {
+    let url: String
+    let width: Int
+    let height: Int
+    let isAd: Bool
+    var id: String { url }
+
+    var label: String {
+        let name = (url as NSString).lastPathComponent
+        let short = name.isEmpty ? (url as NSString).lastPathComponent : name
+        let size = (width > 0 && height > 0) ? " · \(width)×\(height)" : ""
+        return String(short.prefix(46)) + size
+    }
+}
+
+/// URL de media trouvee sur la page courante.
     @Published private(set) var mediaURL: String?
     @Published private(set) var segmented = false
     /// Un element <video> est present, meme si son flux n'est pas encore connu.
     @Published private(set) var hasVideo = false
+    /// Tous les flux detectes, pour que l'utilisateur puisse trancher.
+    @Published private(set) var candidates: [Candidate] = []
+    @Published var pickedURL: String?
 
     private weak var web: WKWebView?
     private var shown = ""
-    private var hasMedia = false
+    private var adCount = 0
 
     private static let startPage = "https://duckduckgo.com"
 
@@ -343,7 +400,9 @@ final class BrowserModel: ObservableObject {
         address = shown
         mediaURL = nil
         hasVideo = false
-        hasMedia = false
+        candidates = []
+        pickedURL = nil
+        adCount = 0
         hint = nil
         web?.load(URLRequest(url: url))
     }
@@ -370,17 +429,41 @@ final class BrowserModel: ObservableObject {
         case "media":
             let found = body["media"] as? String
             let video = (body["hasVideo"] as? Bool) ?? false
-            // Une seule ligne par etat nouveau : le journal reste lisible.
-            if video && !hasVideo {
-                CrashLog.step("media: <video> detecte")
+            let raw = body["list"] as? [[String: Any]] ?? []
+
+            let list = raw.compactMap { item -> Candidate? in
+                guard let url = item["url"] as? String, !url.isEmpty else { return nil }
+                return Candidate(
+                    url: url,
+                    width: (item["w"] as? Int) ?? 0,
+                    height: (item["h"] as? Int) ?? 0,
+                    isAd: (item["ad"] as? Bool) ?? false
+                )
             }
-            if found != nil && mediaURL == nil {
+
+            // Un seul log par decouverte, sinon le journal noie tout.
+            if video && !hasVideo {
+                CrashLog.step("media: <video> detecte (\(list.count) flux)")
+            }
+            if found != nil && found != mediaURL {
                 CrashLog.step("media: flux \(found!.prefix(70))")
             }
+            let pubCount = list.filter(\.isAd).count
+            if pubCount > 0 && adCount != pubCount {
+                adCount = pubCount
+                CrashLog.step("media: \(pubCount) lecteur(s) publicitaire(s) ecarte(s)")
+            }
+
+            candidates = list
             mediaURL = found
             segmented = (body["segmented"] as? Bool) ?? false
             hasVideo = video
-            hasMedia = mediaURL != nil
+            // Un choix manuel reste valable tant que son flux est encore là.
+            if let picked = pickedURL, list.contains(where: { $0.url == picked }) {
+                mediaURL = picked
+            } else {
+                pickedURL = nil
+            }
             updateHint()
         default:
             break
@@ -396,10 +479,15 @@ final class BrowserModel: ObservableObject {
             hint = "Vidéo trouvée. Lance la lecture pour que le flux soit transmis."
             return
         }
+        let ads = candidates.filter(\.isAd).count
+        let extra = ads > 0 ? " · \(ads) pub\(ads > 1 ? "s" : "") ignorée\(ads > 1 ? "s" : "")" : ""
         hint = segmented
             ? "Flux segmenté (.m3u8 / .mpd) : XGrab ne peut pas l'assembler."
-            : "Vidéo détectée : \((media as NSString).lastPathComponent.prefix(52))"
+            : "Vidéo détectée : \((media as NSString).lastPathComponent.prefix(46))\(extra)"
     }
+
+    /// Flux que l'utilisateur a choisi manuellement, sinon le meilleur.
+    var chosenURL: String? { pickedURL ?? mediaURL }
 
     /// Une navigation annulee (-999) est normale : elle est remplacee par la
     /// suivante. Seul le dernier echec reel est affiche.
@@ -416,8 +504,8 @@ final class BrowserModel: ObservableObject {
     /// On reprend le User-Agent et les cookies du WKWebView : sans eux, les
     /// CDN renvoient 403 sur un fichier qu'ils servent pourtant au navigateur.
     func download() {
-        CrashLog.step("download: debut, media=\(mediaURL ?? "nil")")
-        guard let media = mediaURL, let web = web else {
+        CrashLog.step("download: debut, media=\(chosenURL ?? "nil")")
+        guard let media = chosenURL, let web = web else {
             CrashLog.step("download: media ou web manquant")
             return
         }
@@ -503,39 +591,80 @@ final class BrowserModel: ObservableObject {
 
       function sourceOf(video) {
         const direct = video.currentSrc || video.src || '';
-        if (direct && /^https?:\\/\\//i.test(direct)) return direct;
+        if (usable(direct)) return direct.split('#')[0];
         for (const node of video.querySelectorAll('source[src]')) {
           const url = node.getAttribute('src') || '';
-          if (/^https?:\\/\\//i.test(url)) return url;
+          if (usable(url)) return url.split('#')[0];
         }
+        // Lecteur MSE : currentSrc vaut "blob:", on reprend alors la derniere
+        // URL reelle observee dans les requetes du document.
         const fresh = recent.find((i) => Date.now() - i.at < 45000);
         return fresh ? fresh.url : '';
       }
 
-      function best() {
-        const videos = Array.from(document.querySelectorAll('video'));
-        if (!videos.length) return null;
-        const visible = videos.filter((v) => {
-          const b = v.getBoundingClientRect();
-          return b.width > 60 && b.height > 40;
-        });
-        const list = visible.length ? visible : videos;
-        list.sort((a, b) => {
-          const x = a.getBoundingClientRect(), y = b.getBoundingClientRect();
-          return y.width * y.height - x.width * x.height;
-        });
-        return list[0];
+      // Un blob: n'est pas telechargeable par l'app.
+      function usable(u) {
+        return !!u && /^https?:\\/\\//i.test(u) && !/^blob:/i.test(u);
+      }
+
+      // Marqueurs de publicite dans le chemin de l'URL.
+      const AD_PATH = /(^|[\\/_.-])(ad|ads|adserver|adframe|advert|advertising|banner|banners|preroll|midroll|rollover|rollunder|spot|promo|promos|teaser|roomad|sponsor|sponsored|partner|thumb|thumbs)([\\/_.-]|$)/i;
+
+      // Marqueurs dans les attributs des conteneurs.
+      const AD_MARK = /(ad-|ads-|ad_|ads_|adbox|adslot|adunit|adframe|advert|banner|preroll|midroll|sponsor|sponsored|partner|commercial|promo)/;
+
+      function adContext(el) {
+        let node = el, depth = 0;
+        while (node && depth < 6 && node !== document.body) {
+          const cls = node.className;
+          const sig = ((cls && cls.baseVal !== undefined) ? cls.baseVal : (cls || '')) +
+                      ' ' + (node.id || '');
+          if (AD_MARK.test(String(sig).toLowerCase())) return true;
+          node = node.parentElement;
+          depth++;
+        }
+        return false;
+      }
+
+      function describe(video) {
+        const url = sourceOf(video);
+        const r = video.getBoundingClientRect();
+        const area = Math.max(0, r.width) * Math.max(0, r.height);
+        let ad = false;
+        if (url && AD_PATH.test(url)) ad = true;
+        if (adContext(video)) ad = true;
+        if (video.loop) ad = true;
+        const d = video.duration;
+        if (isFinite(d) && d > 0 && d < 30) ad = true;
+
+        let score = area;
+        if (ad) score *= 0.05;
+        if (video.muted && video.autoplay) score *= 0.5;
+        return {
+          url: url || '',
+          w: Math.round(r.width),
+          h: Math.round(r.height),
+          ad: ad,
+          score: Math.round(score),
+        };
       }
 
       function report() {
-        const video = best();
-        let media = video ? sourceOf(video) : '';
-        const segmented = !!media && SEG.test(media);
+        const videos = Array.from(document.querySelectorAll('video'));
+        const list = videos.map(describe).filter((d) => d.url);
+        list.sort((a, b) => b.score - a.score);
+
+        // On prefere toujours un candidat qui n'est pas une publicite.
+        const clean = list.filter((d) => !d.ad);
+        const pool = clean.length ? clean : list;
+        const best = pool[0] || null;
+
         window.webkit.messageHandlers.xgrab.postMessage({
           event: 'media',
-          media: media || null,
-          segmented: segmented,
-          hasVideo: !!video,
+          media: best ? best.url : null,
+          segmented: !!best && SEG.test(best.url),
+          hasVideo: videos.length > 0,
+          list: list.slice(0, 8),
         });
       }
 
