@@ -177,7 +177,7 @@ private struct WebViewRepresentable: UIViewRepresentable {
                 } else {
                     // Secours : la liste n'a pas compile, on nettoie au moins
                     // les overlays en JavaScript.
-                    web.configuration.userContentController.add(AdBlocker.fallbackCleaner())
+                    web.configuration.userContentController.addUserScript(AdBlocker.fallbackCleaner())
                 }
                 model.adBlockReady = (list != nil)
                 model.attach(web)
