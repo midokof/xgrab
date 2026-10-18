@@ -499,6 +499,10 @@ struct Candidate: Identifiable {
         case "url":
             let value = body["url"] as? String ?? ""
             if value != shown { shown = value; address = value }
+        case "target":
+            if let url = body["url"] as? String, url != mediaURL {
+                CrashLog.step("media: cible \(url.prefix(70))")
+            }
         case "probe-error":
             probeError = (body["message"] as? String) ?? "erreur inconnue"
             CrashLog.step("sonde: ERREUR \(probeError ?? "")")
@@ -525,7 +529,7 @@ struct Candidate: Identifiable {
 
             // Un seul log par decouverte, sinon le journal noie tout.
             if video && !hasVideo {
-                CrashLog.step("media: <video> detecte (\(list.count) flux)")
+                CrashLog.step("media: <video> detecte (\(list.count) contenu)")
             }
             if found != nil && found != mediaURL {
                 CrashLog.step("media: flux \(found!.prefix(70))")
@@ -764,6 +768,7 @@ private extension BrowserModel {
         const url = sourceOf(video);
         const r = video.getBoundingClientRect();
         const area = Math.max(0, r.width) * Math.max(0, r.height);
+
         let ad = false;
         if (url && AD_PATH.test(url)) ad = true;
         if (adContext(video)) ad = true;
@@ -771,14 +776,20 @@ private extension BrowserModel {
         const d = video.duration;
         if (isFinite(d) && d > 0 && d < 30) ad = true;
 
+        // Memesans marqueur dans l'URL, une publicite se distingue par son
+        // comportement : elle demarre seule, sans son, et se repete.
+        const silent = video.muted && video.autoplay;
+
         let score = area;
         if (ad) score *= 0.05;
-        if (video.muted && video.autoplay) score *= 0.5;
+        if (silent) score *= 0.2;
+        if (video.loop && !ad) score *= 0.3;
+
         return {
           url: url || '',
           w: Math.round(r.width),
           h: Math.round(r.height),
-          ad: ad,
+          ad: ad || silent,
           score: Math.round(score),
         };
       }
@@ -788,6 +799,8 @@ private extension BrowserModel {
       // que la balise video joue en ce moment.
       var button = null;
       var buttonFor = null;
+      // Lecteur retenu : il ne change plus tant qu'il reste dans la page.
+      var sticky = null;
 
       function label(video) {
         const h = video.videoHeight || 0;
@@ -906,27 +919,46 @@ private extension BrowserModel {
         // n'apparaitrait jamais : on isole et on continue.
         try {
           const videos = Array.from(document.querySelectorAll('video'));
-          const list = videos.map(describe).filter((d) => d.url);
-          list.sort((a, b) => b.score - a.score);
-
-          // On prefere toujours un candidat qui n'est pas une publicite.
-          const clean = list.filter((d) => !d.ad);
-          const pool = clean.length ? clean : list;
-          const best = pool[0] || null;
-
-          if (best) {
-            const chosen = videos.find((v) => sourceOf(v) === best.url);
-            if (chosen) place(chosen); else drop();
-          } else {
-            drop();
+          const entries = [];
+          for (const v of videos) {
+            const d = describe(v);
+            if (d.url) entries.push({ v: v, d: d });
           }
 
+          // Cible figee. Sur une page chargee de publicites, le « plus grand
+          // lecteur » change plusieurs fois par seconde : sans verrou, le
+          // bouton est detruit puis recree en boucle et n'est jamais stable.
+          if (!(sticky && sticky.isConnected && sourceOf(sticky))) sticky = null;
+
+          let chosen = sticky;
+          if (!chosen) {
+            const clean = entries.filter((e) => !e.d.ad);
+            if (clean.length) {
+              clean.sort((a, b) => b.d.score - a.d.score);
+              chosen = clean[0].v;
+              sticky = chosen;
+              window.webkit.messageHandlers.xgrab.postMessage({
+                event: 'target',
+                url: sourceOf(chosen),
+              });
+            }
+          }
+
+          if (chosen) place(chosen); else drop();
+
+          // Seuls les lecteurs de contenu remontent a l'app : proposer une
+          // publicite comme telechargement n'aide personne.
+          const clean = entries.filter((e) => !e.d.ad)
+            .sort((a, b) => b.d.score - a.d.score)
+            .map((e) => e.d);
+
+          const url = chosen ? sourceOf(chosen) : '';
           window.webkit.messageHandlers.xgrab.postMessage({
             event: 'media',
-            media: best ? best.url : null,
-            segmented: !!best && SEG.test(best.url),
+            media: url || null,
+            segmented: !!url && SEG.test(url),
             hasVideo: videos.length > 0,
-            list: list.slice(0, 8),
+            list: clean.slice(0, 8),
           });
         } catch (err) {
           if (!window.__xgrabErr) {
