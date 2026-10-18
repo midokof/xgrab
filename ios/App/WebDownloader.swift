@@ -29,7 +29,14 @@ final class WebDownloader: NSObject {
     ///   - pageURL: la page d'origine, chargee d'abord pour fournir le
     ///     Referer et poser les cookies de session
     func start(jobID: String, url: URL, pageURL: URL?, filename: String) {
+        CrashLog.step("WebDownloader: start pour \(url.lastPathComponent.prefix(40))")
+        DispatchQueue.main.async { self.startNow(jobID: jobID, url: url, pageURL: pageURL, filename: filename) }
+    }
+
+    /// WKWebView doit etre cree et pilote depuis le main thread.
+    private func startNow(jobID: String, url: URL, pageURL: URL?, filename: String) {
         stop()
+        CrashLog.step("WebDownloader: startNow sur le main")
 
         self.jobID = jobID
         self.mediaURL = url.absoluteString

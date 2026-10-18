@@ -99,11 +99,13 @@ final class Downloader: NSObject, ObservableObject {
     // ------------------------------------------------------------------ sessions
 
     private func start() {
+        CrashLog.step("Downloader: start")
         let config = URLSessionConfiguration.background(withIdentifier: "app.xgrab.downloads")
         config.sessionSendsLaunchEvents = true
         config.isDiscretionary = false
         config.allowsCellularAccess = true
         downloads = URLSession(configuration: config, delegate: self, delegateQueue: nil)
+        CrashLog.step("Downloader: session directe prete")
 
         let hlsConfig = URLSessionConfiguration.background(withIdentifier: "app.xgrab.hls")
         hlsConfig.sessionSendsLaunchEvents = true
@@ -112,6 +114,7 @@ final class Downloader: NSObject, ObservableObject {
             assetDownloadDelegate: self,
             delegateQueue: nil
         )
+        CrashLog.step("Downloader: session HLS prete")
     }
 
     // -------------------------------------------------------------------- actions

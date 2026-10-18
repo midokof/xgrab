@@ -13,11 +13,12 @@ struct BrowserView: View {
             Divider()
             WebViewRepresentable(model: model)
         }
-        .overlay(alignment: .bottomTrailing) {
-            if model.mediaURL != nil {
-                Button {
-                    model.download()
-                } label: {
+.overlay(alignment: .bottomTrailing) {
+                if model.mediaURL != nil {
+                    Button {
+                        CrashLog.step("bouton: appuye sur telecharger")
+                        model.download()
+                    } label: {
                     Label("Télécharger", systemImage: "arrow.down.circle.fill")
                         .font(.subheadline.weight(.semibold))
                         .padding(.horizontal, 16)
@@ -84,6 +85,7 @@ private struct WebViewRepresentable: UIViewRepresentable {
     @ObservedObject var model: BrowserModel
 
     func makeUIView(context: Context) -> WKWebView {
+        CrashLog.step("makeUIView: creation du WKWebView")
         let config = WKWebViewConfiguration()
         config.allowsInlineMediaPlayback = true
         config.mediaTypesRequiringUserActionForPlayback = []
@@ -272,7 +274,11 @@ final class BrowserModel: ObservableObject {
 
     /// Ne renvoie que les cookies qui concernent le domaine du media.
     private func cookieHeader(_ cookies: [HTTPCookie], for url: String) -> String {
-        guard let host = URL(string: url)?.host?.lowercased() else { return "" }
+        CrashLog.step("cookieHeader: \(cookies.count) cookie(s)")
+        guard let host = URL(string: url)?.host?.lowercased() else {
+            CrashLog.step("cookieHeader: hote introuvable")
+            return ""
+        }
         return cookies
             .filter { cookie in
                 let domain = cookie.domain.lowercased().trimmingCharacters(in: CharacterSet(charactersIn: "."))
