@@ -3,41 +3,41 @@
     "trigger": {
       "url-filter": ".*",
       "if-domain": [
-        "*doubleclick.net*", "*googlesyndication.com*", "*googleadservices.com*",
-        "*google-analytics.com*", "*googletagmanager.com*", "*adservice.google*",
-        "*adnxs.com*", "*rubiconproject.com*", "*pubmatic.com*", "*openx.net*",
-        "*criteo.com*", "*criteo.net*", "*taboola.com*", "*outbrain.com*",
-        "*adroll.com*", "*sharethrough.com*", "*indexww.com*", "*casalemedia.com*",
-        "*33across.com*", "*smartadserver.com*", "*teads.tv*", "*imasdk.googleapis.com*",
-        "*adsystem.com*", "*amazon-adsystem.com*", "*yieldmo.com*", "*zedo.com*",
-        "*popads.net*", "*propellerads.com*", "*mgid.com*", "*adcash.com*",
-        "*exoclick.com*", "*juicyads.com*", "*hilltopads.net*", "*adsterra.com*",
-        "*onclickalgo.com*", "*push-notification.com*", "*poperblock.com*"
+        "*doubleclick.net", "*googlesyndication.com", "*googleadservices.com",
+        "*google-analytics.com", "*googletagmanager.com", "*adservice.google",
+        "*adnxs.com", "*rubiconproject.com", "*pubmatic.com", "*openx.net",
+        "*criteo.com", "*criteo.net", "*taboola.com", "*outbrain.com",
+        "*adroll.com", "*sharethrough.com", "*indexww.com", "*casalemedia.com",
+        "*33across.com", "*smartadserver.com", "*teads.tv", "*imasdk.googleapis.com",
+        "*adsystem.com", "*amazon-adsystem.com", "*yieldmo.com", "*zedo.com",
+        "*popads.net", "*propellerads.com", "*mgid.com", "*adcash.com",
+        "*exoclick.com", "*juicyads.com", "*hilltopads.net", "*adsterra.com",
+        "*onclickalgo.com", "*poperblock.com", "*adskeeper.com", "*revcontent.com",
+        "*adiquity.com", "*bidswitch.net", "*contextweb.com", "*gumgum.com",
+        "*adhigh.net", "*adform.net", "*districtm.io", "*mediance.com",
+        "*media.net", "*sonobi.com", "*spotxchange.com", "*undertone.com"
       ]
     },
     "action": { "type": "block" }
   },
   {
     "trigger": {
-      "url-filter": "^https?://[^/]+/(adserver|adserver2|ads|adsbygoogle|advert|advertising|adservice|banner|pagead|popunder|popads|tracking|clicktrack|utm_|pixel)[/?-]"
+      "url-filter": "^https?://[^/]+/(adserver|adserver2|ads|adsbygoogle|advert|advertising|adservice|adframe|adhandler|adframe|pagead|popunder|popads|clicktrack|utm\\.gif|tracking)([/?-]|$)"
     },
     "action": { "type": "block" }
   },
   {
     "trigger": {
-      "url-filter": "[?&](ad_?unit|adslot|adtype|ad_zone|advertiser|banner_?(id|pos)|zone_?id)=[^&]*"
+      "url-filter": "[?&](ad_?unit|adslot|adtype|ad_zone|advertiser|zone_?id|ad_?id|ad_?slot)=[^&]*"
     },
     "action": { "type": "block" }
   },
   {
     "trigger": {
-      "url-filter": ".*",
-      "resource-type": ["document", "image", "media", "raw", "script", "style-sheet", "font", "popup", "ping", "fetch", "svg-document", "websocket"]
+      "url-filter": ".*googlesyndication.*",
+      "resource-type": ["script", "image", "raw", "xmlhttprequest", "sub-document"]
     },
-    "action": {
-      "type": "css-display-none",
-      "selector": "[id^=\"ad-\"], [id^=\"ad_\"], [id^=\"ads-\"], [id^=\"banner\"], [id^=\"div-gpt-ad\"], [id*=\"-ad-container\"], [id*=\"ad-wrapper\"], [id*=\"adbanner\"], [id*=\"popup-overlay\"], [id*=\"modal-overlay\"], [id*=\"interstitial\"], [class^=\"ad-\"], [class^=\"ad_\"], [class^=\"ads-\"], [class^=\"advert\"], [class*=\"ad-container\"], [class*=\"ad-wrapper\"], [class*=\"ad-slot\"], [class*=\"adsbygoogle\"], [class*=\"banner-ad\"], [class*=\"popup-under\"], [class*=\"popunder\"], [class*=\"interstitial\"], [class*=\"sticky-footer\"], [class*=\"consent-overlay\"], iframe[src*=\"doubleclick\"], iframe[src*=\"googlesyndication\"], iframe[id^=\"aswift_\"]"
-    }
+    "action": { "type": "block" }
   },
   {
     "trigger": {
@@ -45,5 +45,15 @@
       "resource-type": ["popup"]
     },
     "action": { "type": "block" }
+  },
+  {
+    "trigger": {
+      "url-filter": ".*",
+      "resource-type": ["document"]
+    },
+    "action": {
+      "type": "css-display-none",
+      "selector": "iframe[id^=\"aswift_\"], iframe[src*=\"doubleclick\"], iframe[src*=\"googlesyndication\"], iframe[src*=\"2mdn.net\"], [id^=\"div-gpt-ad\"], [id^=\"ad-slot\"], [id^=\"ad_\"], [id^=\"ad-\"], [id^=\"banner\"], [id^=\"ads-\"], [id*=\"-ad-container\"], [id*=\"ad-wrapper\"], [id*=\"adbanner\"], [id*=\"adbox\"], [id*=\"popunder\"], [id*=\"pop-up\"], [id*=\"popup-overlay\"], [id*=\"modal-overlay\"], [id*=\"interstitial\"], [id*=\"exit-intent\"], [class^=\"ad-\"], [class^=\"ad_\"], [class^=\"ads-\"], [class^=\"ads_\"], [class^=\"advert\"], [class*=\"ad-container\"], [class*=\"ad-container\"], [class*=\"ad-wrapper\"], [class*=\"ad-slot\"], [class*=\"ad-placement\"], [class*=\"adsbygoogle\"], [class*=\"banner-ad\"], [class*=\"popup-under\"], [class*=\"popunder\"], [class*=\"pop-up\"], [class*=\"interstitial\"], [class*=\"sticky-footer\"], [class*=\"consent-overlay\"], [class*=\"onload-modal\"], [class*=\"exit-intent\"]"
+    }
   }
 ]

@@ -160,7 +160,9 @@ private struct WebViewRepresentable: UIViewRepresentable {
         config.userContentController.add(context.coordinator, name: "xgrab")
         config.userContentController.addUserScript(AdBlocker.popupGuard())
 
-        let web = WKWebView(frame: .zero, configuration: config)
+        // Un cadre non nul evite l'ecran blanc sur les WKWebView crees hors
+        // d'une hierarchie de vues deja cassee.
+        let web = WKWebView(frame: CGRect(x: 0, y: 0, width: 400, height: 800), configuration: config)
         web.navigationDelegate = context.coordinator
         web.uiDelegate = context.coordinator
         web.allowsBackForwardNavigationGestures = true
@@ -170,7 +172,13 @@ private struct WebViewRepresentable: UIViewRepresentable {
         // page initiale s'afficherait sans le blocage.
         AdBlocker.ruleList { list in
             DispatchQueue.main.async {
-                if let list = list { web.configuration.userContentController.add(list) }
+                if let list = list {
+                    web.configuration.userContentController.add(list)
+                } else {
+                    // Secours : la liste n'a pas compile, on nettoie au moins
+                    // les overlays en JavaScript.
+                    web.configuration.userContentController.add(AdBlocker.fallbackCleaner())
+                }
                 model.adBlockReady = (list != nil)
                 model.attach(web)
             }
@@ -220,6 +228,15 @@ private struct WebViewRepresentable: UIViewRepresentable {
                      withError error: Error) {
             model.loading = false
             model.report(error)
+        }
+
+        /// iOS tue le processus de contenu quand la memoire manque ou que
+        /// l'app revient de l'arriere-plan : sans rechargement, la vue reste
+        /// blanche definitivement.
+        func webViewWebContentProcessDidTerminate(_ web: WKWebView) {
+            CrashLog.step("webcontent: processus termine, rechargement")
+            model.loading = true
+            web.reload()
         }
 
         // MARK: popups

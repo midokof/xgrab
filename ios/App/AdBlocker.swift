@@ -53,38 +53,67 @@ enum AdBlocker {
     }
 
     /// Empêche les pages d'ouvrir une fenêtre secondaire.
+    ///
+    /// Le nettoyage des popunders est volontairement limité : un
+    /// `MutationObserver` qui interroge tout le document a chaque mutation
+    /// sature le thread principal des pages vidéo et gèle la détection.
     static func popupGuard() -> WKUserScript {
         let source = """
         (function () {
-          const deny = function () { return null; };
-          try { Object.defineProperty(window, 'open', {
-            configurable: false, writable: false, value: deny });
-          } catch (e) { window.open = deny; }
-
-          // Certains popunders passent par un iframe nomme.
-          try { window.name = ''; } catch (e) {}
           try {
-            window.addEventListener('beforeunload', function (e) {
-              const to = document.referrer || '';
-              if (to && to !== location.href) { /* navigation inter-site refusee */ }
-            }, true);
-          } catch (e) {}
+            Object.defineProperty(window, 'open', {
+              configurable: false, writable: false, value: function () { return null; }
+            });
+          } catch (e) { window.open = function () { return null; }; }
 
-          // Signale a l'app tout ce qui ressemble a une superposition publicitaire.
-          function scan() {
-            const nodes = document.querySelectorAll(
-              '[class*="popunder"],[id*="popunder"],[class*="onload-modal"],' +
-              '[id*="exit-intent"],[class*="exit-intent"]');
-            nodes.forEach(function (n) { n.remove(); });
+          try { window.name = ''; } catch (e) {}
+
+          var SELECTOR = '[class*="popunder"],[id*="popunder"],[class*="exit-intent"],' +
+                         '[id*="exit-intent"],[class*="onload-modal"]';
+          var armed = true;
+
+          function sweep() {
+            if (!armed) return;
+            var nodes = document.querySelectorAll(SELECTOR);
+            for (var i = 0; i < nodes.length; i++) nodes[i].remove();
           }
-          scan();
-          new MutationObserver(scan).observe(
-            document.documentElement, { childList: true, subtree: true });
+
+          // Balayage espace : au plus une fois toutes les 1500 ms, et
+          // uniquement si la page a encore des popunders a retirer.
+          setInterval(function () {
+            if (!armed) return;
+            if (document.querySelector(SELECTOR)) sweep();
+          }, 1500);
+
+          window.addEventListener('load', function () {
+            setTimeout(function () { armed = false; }, 30000);
+          });
         })();
         """
         return WKUserScript(
             source: source,
             injectionTime: .atDocumentStart,
+            forMainFrameOnly: false
+        )
+    }
+
+    /// Nettoyage JavaScript de secours, utilisé seulement si la liste de
+    /// regles n'a pas compile. Plus modeste que le bloqueur natif : il
+    /// n'agit que sur les overlays-HTML, pas sur les requetes reseau.
+    static func fallbackCleaner() -> WKUserScript {
+        let source = """
+        (function () {
+          var SELECTOR = 'iframe[src*="doubleclick"],iframe[src*="googlesyndication"],' +
+                         '[id^="div-gpt-ad"],[class*="adsbygoogle"],[class*="popunder"]';
+          setInterval(function () {
+            var nodes = document.querySelectorAll(SELECTOR);
+            for (var i = 0; i < nodes.length; i++) nodes[i].remove();
+          }, 2000);
+        })();
+        """
+        return WKUserScript(
+            source: source,
+            injectionTime: .atDocumentEnd,
             forMainFrameOnly: false
         )
     }

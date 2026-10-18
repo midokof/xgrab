@@ -47,20 +47,22 @@ struct XGrabApp: App {
     var body: some Scene {
         WindowGroup {
             ZStack(alignment: .bottom) {
-                content
+                // Les deux vues restent montees en permanence. Un `switch`
+                // retirerait le WKWebView de la hierarchie : iOS le
+                // reafficherait en blanc au retour sur l'onglet.
+                DownloadsView()
+                    .opacity(tab == .files ? 1 : 0)
+                    .allowsHitTesting(tab == .files)
+                    .accessibilityHidden(tab != .files)
+
+                BrowserView()
+                    .opacity(tab == .browser ? 1 : 0)
+                    .allowsHitTesting(tab == .browser)
+                    .accessibilityHidden(tab != .browser)
+
                 tabBar
             }
             .ignoresSafeArea(.keyboard, edges: .bottom)
-        }
-    }
-
-    @ViewBuilder
-    private var content: some View {
-        switch tab {
-        case .browser:
-            BrowserView()
-        case .files:
-            DownloadsView()
         }
     }
 
