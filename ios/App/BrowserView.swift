@@ -71,7 +71,7 @@ struct BrowserView: View {
                 )
                 .overlay(
                     RoundedRectangle(cornerRadius: 12, style: .continuous)
-                        .strokeBorder(Theme.accent.opacity(model.mediaURL == nil ? 0 : 0.45), lineWidth: 2)
+                        .strokeBorder(Theme.accent.opacity(model.hasVideo ? 0.5 : 0), lineWidth: 2)
                 )
 
                 Button {
@@ -90,12 +90,10 @@ struct BrowserView: View {
             HStack(spacing: 6) {
                 Image(systemName: "shield.lefthalf.filled")
                     .font(.system(size: 10, weight: .bold))
-                Text("Publicités et popups bloqués")
+                Text("Pubs, popups et scripts publicitaires bloqués")
                     .font(.system(size: 11, weight: .semibold))
                 Spacer()
-                if model.adBlockReady {
-                    StatusPill(title: "PROTÉGÉ", colour: Theme.success)
-                }
+                StatusPill(title: "PROTÉGÉ", colour: Theme.success)
             }
             .foregroundStyle(.secondary)
             .padding(.horizontal, Theme.gutter + 4)
@@ -117,17 +115,22 @@ struct BrowserView: View {
 
     @ViewBuilder
     private var downloadButton: some View {
-        if model.mediaURL != nil {
+        if model.hasVideo {
             Button {
+                guard model.mediaURL != nil else {
+                    model.hint = "Démarre la lecture : le flux n'est pas encore chargé."
+                    return
+                }
                 CrashLog.step("bouton: appuye sur telecharger")
                 model.download()
             } label: {
                 HStack(spacing: 10) {
-                    Image(systemName: "arrow.down.circle.fill")
+                    Image(systemName: model.mediaURL == nil
+                          ? "hourglass.circle.fill" : "arrow.down.circle.fill")
                         .font(.system(size: 20, weight: .semibold))
-                    Text("Télécharger la vidéo")
+                    Text(model.mediaURL == nil ? "Lecture requise" : "Télécharger la vidéo")
                         .font(.system(size: 15, weight: .bold))
-                    if model.segmented {
+                    if model.segmented && model.mediaURL != nil {
                         Text("· flux")
                             .font(.system(size: 12, weight: .medium))
                             .opacity(0.8)
@@ -158,7 +161,10 @@ private struct WebViewRepresentable: UIViewRepresentable {
         config.mediaTypesRequiringUserActionForPlayback = []
         config.websiteDataStore = .default()
         config.userContentController.add(context.coordinator, name: "xgrab")
-        config.userContentController.addUserScript(AdBlocker.popupGuard())
+        // Le blocage JavaScript ne depend d'aucun stockage : il est toujours
+        // present, contrairement au bloqueur natif.
+        config.userContentController.addUserScript(AdBlocker.blocker())
+        AdBlocker.installNative(into: config.userContentController)
 
         // Un cadre non nul evite l'ecran blanc sur les WKWebView crees hors
         // d'une hierarchie de vues deja cassee.
@@ -168,20 +174,10 @@ private struct WebViewRepresentable: UIViewRepresentable {
         web.allowsBackForwardNavigationGestures = true
         context.coordinator.web = web
 
-        // Le premier chargement attend la compilation des regles : sinon la
-        // page initiale s'afficherait sans le blocage.
-        AdBlocker.ruleList { list in
-            DispatchQueue.main.async {
-                if let list = list {
-                    web.configuration.userContentController.add(list)
-                } else {
-                    // Secours : la liste n'a pas compile, on nettoie au moins
-                    // les overlays en JavaScript.
-                    web.configuration.userContentController.addUserScript(AdBlocker.fallbackCleaner())
-                }
-                model.adBlockReady = (list != nil)
-                model.attach(web)
-            }
+        // L'attente du compileur natif ne doit plus retarder le premier
+        // chargement : la couche JavaScript, elle, est deja en place.
+        DispatchQueue.main.async {
+            model.attach(web)
         }
         return web
     }
@@ -296,11 +292,12 @@ final class BrowserModel: ObservableObject {
     @Published var loading = false
     @Published var canGoBack = false
     @Published var hint: String?
-    @Published var adBlockReady = false
 
     /// URL de media trouvee sur la page courante.
     @Published private(set) var mediaURL: String?
     @Published private(set) var segmented = false
+    /// Un element <video> est present, meme si son flux n'est pas encore connu.
+    @Published private(set) var hasVideo = false
 
     private weak var web: WKWebView?
     private var shown = ""
@@ -322,6 +319,7 @@ final class BrowserModel: ObservableObject {
         shown = url.absoluteString
         address = shown
         mediaURL = nil
+        hasVideo = false
         hasMedia = false
         hint = nil
         web?.load(URLRequest(url: url))
@@ -349,6 +347,7 @@ final class BrowserModel: ObservableObject {
         case "media":
             mediaURL = body["media"] as? String
             segmented = (body["segmented"] as? Bool) ?? false
+            hasVideo = (body["hasVideo"] as? Bool) ?? false
             hasMedia = mediaURL != nil
             updateHint()
         default:
@@ -357,8 +356,12 @@ final class BrowserModel: ObservableObject {
     }
 
     private func updateHint() {
-        guard let media = mediaURL else {
+        guard hasVideo else {
             hint = "Aucune vidéo détectée sur cette page."
+            return
+        }
+        guard let media = mediaURL else {
+            hint = "Vidéo trouvée. Lance la lecture pour que le flux soit transmis."
             return
         }
         hint = segmented
@@ -495,6 +498,7 @@ final class BrowserModel: ObservableObject {
           event: 'media',
           media: media || null,
           segmented: segmented,
+          hasVideo: !!video,
         });
       }
 
@@ -508,7 +512,25 @@ final class BrowserModel: ObservableObject {
         window.__xgrabTimer = setTimeout(report, 400);
       }).observe(document.documentElement, { childList: true, subtree: true });
 
-      document.addEventListener('play', function () { report(); }, true);
+      // Un flux peut etre injecte par attribut sans changer le DOM : on
+      // surveille aussi les attributs src des <video> et <source>.
+      new MutationObserver(function (records) {
+        for (const r of records) {
+          if (r.type === 'attributes') report();
+        }
+      }).observe(document.documentElement, {
+        attributes: true,
+        attributeFilter: ['src', 'currentSrc'],
+        subtree: true,
+      });
+
+      // Le flux n'apparait souvent qu'apres le lancement de la lecture.
+      for (const type of ['play', 'playing', 'loadedmetadata', 'canplay',
+                          'durationchange', 'progress']) {
+        document.addEventListener(type, function () { report(); }, true);
+      }
+      document.addEventListener('sourcechange', function () { report(); }, true);
+
       window.__xgrabTimer = setInterval(report, 1500);
       report();
     })();
