@@ -51,6 +51,10 @@ final class BrowserModel: NSObject, ObservableObject {
     }
 
     override init() {
+        // La valeur est lue dans une constante locale : toucher une propriete
+        // @Published avant super.init() est interdit par Swift.
+        let enabled = UserDefaults.standard.object(forKey: "blocking") as? Bool ?? true
+
         let config = WKWebViewConfiguration()
         config.allowsInlineMediaPlayback = true
         config.mediaTypesRequiringUserActionForPlayback = []
@@ -58,8 +62,7 @@ final class BrowserModel: NSObject, ObservableObject {
 
         // Scripts enregistres une fois : ils sont appliques a chaque document
         // affiche par cette vue, sans jamais dependre d'un stockage externe.
-        blocking = UserDefaults.standard.object(forKey: "blocking") as? Bool ?? true
-        if blocking {
+        if enabled {
             config.userContentController.addUserScript(
                 WKUserScript(source: PageScript.shield, injectionTime: .atDocumentStart,
                              forMainFrameOnly: false))
@@ -71,6 +74,7 @@ final class BrowserModel: NSObject, ObservableObject {
         web = WKWebView(frame: UIScreen.main.bounds, configuration: config)
         super.init()
 
+        blocking = enabled
         web.navigationDelegate = self
         web.uiDelegate = self
         web.allowsBackForwardNavigationGestures = true
