@@ -21,9 +21,16 @@ enum CrashLog {
     private static var lines: [String] = []
     private static let limit = 400
 
+    /// Le groupe partage quand il existe, sinon Documents : le journal doit
+    /// fonctionner meme quand le conteneur n'est pas resolu.
     static var fileURL: URL? {
-        FileManager.default
-            .containerURL(forSecurityApplicationGroupIdentifier: "group.app.xgrab")?
+        if let shared = FileManager.default
+            .containerURL(forSecurityApplicationGroupIdentifier: "group.app.xgrab") {
+            return shared.appendingPathComponent("crash.log")
+        }
+        return FileManager.default
+            .urls(for: .documentDirectory, in: .userDomainMask)
+            .first?
             .appendingPathComponent("crash.log")
     }
 

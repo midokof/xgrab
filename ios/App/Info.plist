@@ -35,13 +35,11 @@
 	<key>ITSAppUsesNonExemptEncryption</key>
 	<false/>
 
+	<!-- L'app ne contacte plus le PC : plus aucune permission reseau local. -->
 	<key>NSAppTransportSecurity</key>
 	<dict>
 		<key>NSAllowsLocalNetworking</key>
 		<true/>
 	</dict>
-
-	<key>NSLocalNetworkUsageDescription</key>
-	<string>XGrab se connecte a XGrab sur votre ordinateur pour y envoyer les liens a telecharger.</string>
 </dict>
 </plist>

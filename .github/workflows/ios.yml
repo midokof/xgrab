@@ -57,9 +57,8 @@ jobs:
         if: steps.secrets.outputs.signed == 'false'
         run: |
           set -uo pipefail
-          # "archive" valide systematiquement la signature et refuse une
-          # cible de type App Extension meme avec CODE_SIGNING_ALLOWED=NO.
-          # "build" passe par-dessus, ce qui suffit pour TrollStore.
+          # "archive" valide systematiquement la signature. "build" passe
+          # par-dessus et suffit a produire un bundle installable.
           xcodebuild build \
             -project ios/XGrab.xcodeproj \
             -scheme XGrab \
@@ -88,21 +87,28 @@ jobs:
           echo "$app" > "$RUNNER_TEMP/app-path"
           ls -la "$app"
 
-      - name: Verify the bundle metadata
+- name: Verify the bundle metadata
         # installd refuse un bundle dont CFBundleExecutable ne correspond pas
         # a un fichier reellement present : on le verifie ici plutot que sur
-        # le telephone.
+        # le telephone. On verifie aussi que le blocage des publicites est bien
+        # embarque et qu'aucune extension ne l'est.
         run: |
           set -euo pipefail
           app=$(cat "$RUNNER_TEMP/app-path")
           exe=$(/usr/libexec/PlistBuddy -c "Print :CFBundleExecutable" "$app/Info.plist")
           echo "CFBundleExecutable = $exe"
           test -f "$app/$exe" || { echo "EXECUTABLE ABSENT : $app/$exe"; exit 1; }
-          ext=$(find "$app/PlugIns" -maxdepth 1 -name "*.appex" | head -1)
-          test -n "$ext" || { echo "EXTENSION ABSENTE"; exit 1; }
-          extexe=$(/usr/libexec/PlistBuddy -c "Print :CFBundleExecutable" "$ext/Info.plist")
-          echo "Extension CFBundleExecutable = $extexe"
-          test -f "$ext/$extexe" || { echo "EXECUTABLE EXTENSION ABSENT"; exit 1; }
+
+          test -f "$app/blockerList.json" \
+            || { echo "LISTE DE REGLETS ABSENTE"; exit 1; }
+          echo "blockerList.json = $(wc -c < "$app/blockerList.json") octets"
+
+          if [ -d "$app/PlugIns" ]; then
+            echo "ATTENTION : des extensions sont encore embarquees :"
+            ls -la "$app/PlugIns"
+            exit 1
+          fi
+
           plutil -p "$app/Info.plist" | head -20
 
       - name: Archive (signed)

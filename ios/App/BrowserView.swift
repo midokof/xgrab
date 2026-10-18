@@ -1,81 +1,147 @@
 import SwiftUI
 import WebKit
 
-/// Navigateur integre. C'est la meme technique qu'Aloha : l'app rend la page
-/// elle-meme, injecte du JavaScript, recupere l'URL brute du media et la
-/// telecharge. Aucune extension Safari n'est requise.
+/// Navigateur integre, bloqueur de publicites et de popups.
+///
+/// L'app rend la page elle-meme, injecte du JavaScript pour trouver l'URL
+/// brute du media, puis telecharge le fichier de maniere native. Aucune
+/// extension Safari n'est requise.
 struct BrowserView: View {
     @StateObject private var model = BrowserModel()
 
     var body: some View {
-        VStack(spacing: 0) {
-            bar
-            Divider()
-            WebViewRepresentable(model: model)
-        }
-.overlay(alignment: .bottomTrailing) {
-                if model.mediaURL != nil {
-                    Button {
-                        CrashLog.step("bouton: appuye sur telecharger")
-                        model.download()
-                    } label: {
-                    Label("Télécharger", systemImage: "arrow.down.circle.fill")
-                        .font(.subheadline.weight(.semibold))
-                        .padding(.horizontal, 16)
-                        .padding(.vertical, 12)
-                        .background(Capsule().fill(Color.accentColor))
-                        .foregroundStyle(.white)
-                        .shadow(radius: 6)
-                }
-                .padding(20)
+        ZStack(alignment: .bottom) {
+            VStack(spacing: 0) {
+                addressBar
+                Divider()
+                WebViewRepresentable(model: model)
             }
+
+            downloadButton
+                .padding(.bottom, 12)
         }
         .ignoresSafeArea(.keyboard, edges: .bottom)
     }
 
-    // ------------------------------------------------------------- barre du haut
+    // ------------------------------------------------------------ barre d'adresse
 
-    private var bar: some View {
-        VStack(spacing: 6) {
-            HStack(spacing: 8) {
+    private var addressBar: some View {
+        VStack(spacing: 8) {
+            HStack(spacing: 10) {
                 Button {
                     model.goBack()
                 } label: {
                     Image(systemName: "chevron.left")
+                        .font(.system(size: 15, weight: .bold))
+                        .frame(width: 32, height: 32)
+                        .background(Circle().fill(Color.primary.opacity(0.06)))
                 }
                 .disabled(!model.canGoBack)
 
-                TextField("Adresse ou lien", text: $model.address)
-                    .textFieldStyle(.plain)
-                    .autocorrectionDisabled()
-                    .textInputAutocapitalization(.never)
-                    .keyboardType(.URL)
-                    .submitLabel(.go)
-                    .onSubmit { model.load(model.address) }
+                HStack(spacing: 8) {
+                    Image(systemName: "magnifyingglass")
+                        .font(.system(size: 13, weight: .semibold))
+                        .foregroundStyle(.secondary)
 
-                if model.loading {
-                    ProgressView().controlSize(.small)
-                } else {
-                    Button {
-                        model.load(model.address)
-                    } label: {
-                        Image(systemName: "arrow.clockwise")
+                    TextField("Collez un lien ici", text: $model.address)
+                        .textFieldStyle(.plain)
+                        .autocorrectionDisabled()
+                        .textInputAutocapitalization(.never)
+                        .keyboardType(.URL)
+                        .submitLabel(.go)
+                        .onSubmit { model.load(model.address) }
+                        .font(.system(size: 15))
+
+                    if model.loading {
+                        ProgressView().controlSize(.small)
+                    } else if !model.address.isEmpty {
+                        Button {
+                            model.load("")
+                        } label: {
+                            Image(systemName: "xmark.circle.fill")
+                                .foregroundStyle(.tertiary)
+                        }
                     }
                 }
+                .padding(.horizontal, 12)
+                .padding(.vertical, 9)
+                .background(
+                    RoundedRectangle(cornerRadius: 12, style: .continuous)
+                        .fill(Color(uiColor: .secondarySystemBackground))
+                )
+                .overlay(
+                    RoundedRectangle(cornerRadius: 12, style: .continuous)
+                        .strokeBorder(Theme.accent.opacity(model.mediaURL == nil ? 0 : 0.45), lineWidth: 2)
+                )
+
+                Button {
+                    model.load(model.address)
+                } label: {
+                    Image(systemName: "arrow.clockwise")
+                        .font(.system(size: 14, weight: .bold))
+                        .frame(width: 32, height: 32)
+                        .background(Circle().fill(Theme.accent.opacity(0.15)))
+                        .foregroundStyle(Theme.accent)
+                }
             }
-            .font(.system(size: 15))
-            .padding(.horizontal, 12)
-            .padding(.vertical, 8)
+            .padding(.horizontal, Theme.gutter)
+            .padding(.top, 8)
+
+            HStack(spacing: 6) {
+                Image(systemName: "shield.lefthalf.filled")
+                    .font(.system(size: 10, weight: .bold))
+                Text("Publicités et popups bloqués")
+                    .font(.system(size: 11, weight: .semibold))
+                Spacer()
+                if model.adBlockReady {
+                    StatusPill(title: "PROTÉGÉ", colour: Theme.success)
+                }
+            }
+            .foregroundStyle(.secondary)
+            .padding(.horizontal, Theme.gutter + 4)
 
             if let hint = model.hint {
                 Text(hint)
-                    .font(.caption2)
+                    .font(.system(size: 11))
                     .foregroundStyle(.secondary)
+                    .lineLimit(2)
                     .frame(maxWidth: .infinity, alignment: .leading)
-                    .padding(.horizontal, 12)
+                    .padding(.horizontal, Theme.gutter + 4)
+                    .padding(.bottom, 2)
             }
         }
         .background(.bar)
+    }
+
+    // ------------------------------------------------------------ bouton media
+
+    @ViewBuilder
+    private var downloadButton: some View {
+        if model.mediaURL != nil {
+            Button {
+                CrashLog.step("bouton: appuye sur telecharger")
+                model.download()
+            } label: {
+                HStack(spacing: 10) {
+                    Image(systemName: "arrow.down.circle.fill")
+                        .font(.system(size: 20, weight: .semibold))
+                    Text("Télécharger la vidéo")
+                        .font(.system(size: 15, weight: .bold))
+                    if model.segmented {
+                        Text("· flux")
+                            .font(.system(size: 12, weight: .medium))
+                            .opacity(0.8)
+                    }
+                }
+                .padding(.horizontal, 22)
+                .padding(.vertical, 15)
+                .background(Capsule().fill(Theme.accentGradient))
+                .foregroundStyle(.white)
+                .shadow(color: Theme.accent.opacity(0.45), radius: 18, x: 0, y: 8)
+            }
+            .buttonStyle(.plain)
+            .transition(.scale.combined(with: .opacity))
+        }
     }
 }
 
@@ -86,18 +152,29 @@ private struct WebViewRepresentable: UIViewRepresentable {
 
     func makeUIView(context: Context) -> WKWebView {
         CrashLog.step("makeUIView: creation du WKWebView")
+
         let config = WKWebViewConfiguration()
         config.allowsInlineMediaPlayback = true
         config.mediaTypesRequiringUserActionForPlayback = []
+        config.websiteDataStore = .default()
         config.userContentController.add(context.coordinator, name: "xgrab")
+        config.userContentController.addUserScript(AdBlocker.popupGuard())
 
         let web = WKWebView(frame: .zero, configuration: config)
         web.navigationDelegate = context.coordinator
+        web.uiDelegate = context.coordinator
         web.allowsBackForwardNavigationGestures = true
         context.coordinator.web = web
-        // attach() lance deja le premier chargement : un second load()
-        // annulerait le premier et provoquerait une erreur -999.
-        model.attach(web)
+
+        // Le premier chargement attend la compilation des regles : sinon la
+        // page initiale s'afficherait sans le blocage.
+        AdBlocker.ruleList { list in
+            DispatchQueue.main.async {
+                if let list = list { web.configuration.userContentController.add(list) }
+                model.adBlockReady = (list != nil)
+                model.attach(web)
+            }
+        }
         return web
     }
 
@@ -107,11 +184,13 @@ private struct WebViewRepresentable: UIViewRepresentable {
 
     func makeCoordinator() -> Coordinator { Coordinator(model: model) }
 
-    final class Coordinator: NSObject, WKNavigationDelegate, WKScriptMessageHandler {
+    final class Coordinator: NSObject, WKNavigationDelegate, WKUIDelegate, WKScriptMessageHandler {
         var model: BrowserModel
         weak var web: WKWebView?
 
         init(model: BrowserModel) { self.model = model }
+
+        // MARK: messages
 
         func userContentController(_ c: WKUserContentController, didReceive message: WKScriptMessage) {
             guard message.name == "xgrab" else { return }
@@ -119,12 +198,15 @@ private struct WebViewRepresentable: UIViewRepresentable {
             model.absorb(body)
         }
 
+        // MARK: navigation
+
         func webView(_ web: WKWebView, didStartProvisionalNavigation nav: WKNavigation!) {
             model.loading = true
         }
 
         func webView(_ web: WKWebView, didFinish navigation: WKNavigation!) {
             model.loading = false
+            model.canGoBack = web.canGoBack
             model.inject()
         }
 
@@ -139,6 +221,52 @@ private struct WebViewRepresentable: UIViewRepresentable {
             model.loading = false
             model.report(error)
         }
+
+        // MARK: popups
+
+        /// Renvoie nil : aucune fenêtre secondaire ne peut s'ouvrir. Les liens
+        /// `target="_blank"` sont charges dans la vue principale.
+        func webView(_ web: WKWebView,
+                     createWebViewWith configuration: WKWebViewConfiguration,
+                     for navigationAction: WKNavigationAction,
+                     windowFeatures: WKWindowFeatures) -> WKWebView? {
+            CrashLog.step("popup: bloque")
+            if navigationAction.targetFrame == nil, let url = navigationAction.request.url {
+                var request = navigationAction.request
+                if request.httpBody == nil {
+                    // Une requete POST ne peut pas etre rejouee telle quelle.
+                    if request.httpMethod == "POST" { return nil }
+                }
+                request.url = url
+                web.load(request)
+            }
+            return nil
+        }
+
+        func webView(_ web: WKWebView,
+                     runJavaScriptAlertPanelWithMessage message: String,
+                     initiatedByFrame frame: WKFrameInfo,
+                     completionHandler: @escaping () -> Void) {
+            model.hint = message
+            completionHandler()
+        }
+
+        func webView(_ web: WKWebView,
+                     runJavaScriptConfirmPanelWithMessage message: String,
+                     initiatedByFrame frame: WKFrameInfo,
+                     completionHandler: @escaping (Bool) -> Void) {
+            model.hint = message
+            completionHandler(true)
+        }
+
+        func webView(_ web: WKWebView,
+                     runJavaScriptTextInputPanelWithPrompt prompt: String,
+                     defaultText: String?,
+                     initiatedByFrame frame: WKFrameInfo,
+                     completionHandler: @escaping (String?) -> Void) {
+            model.hint = prompt
+            completionHandler(nil)
+        }
     }
 }
 
@@ -151,6 +279,7 @@ final class BrowserModel: ObservableObject {
     @Published var loading = false
     @Published var canGoBack = false
     @Published var hint: String?
+    @Published var adBlockReady = false
 
     /// URL de media trouvee sur la page courante.
     @Published private(set) var mediaURL: String?
@@ -212,12 +341,12 @@ final class BrowserModel: ObservableObject {
 
     private func updateHint() {
         guard let media = mediaURL else {
-            hint = "Aucun media detecte sur cette page."
+            hint = "Aucune vidéo détectée sur cette page."
             return
         }
         hint = segmented
-            ? "Flux segmenté : XGrab transmettra la page, pas le fichier."
-            : "Media détecté : \((media as NSString).lastPathComponent.prefix(60))"
+            ? "Flux segmenté (.m3u8 / .mpd) : XGrab ne peut pas l'assembler."
+            : "Vidéo détectée : \((media as NSString).lastPathComponent.prefix(52))"
     }
 
     /// Une navigation annulee (-999) est normale : elle est remplacee par la
@@ -228,7 +357,7 @@ final class BrowserModel: ObservableObject {
         hint = "Chargement impossible : \(nsError.localizedDescription)"
     }
 
-    // ---------------------------------------------------------------- injection
+    // ---------------------------------------------------------------- download
 
     /// Lance le telechargement natif de ce que la page expose.
     ///
@@ -260,13 +389,11 @@ final class BrowserModel: ObservableObject {
                         cookies: jar
                     ) != nil else {
                         CrashLog.step("download: enqueue a echoue")
-                        self.hint = "Lien non telechargeable"
+                        self.hint = "Lien non téléchargeable"
                         return
                     }
                     CrashLog.step("download: enqueue ok")
-                    self.hint = self.segmented
-                        ? "Page transmise au PC si un serveur est configure"
-                        : "Ajouté à l'onglet Fichiers"
+                    self.hint = "Téléchargement lancé, vois l'onglet Fichiers"
                 }
             }
         }
@@ -347,9 +474,6 @@ final class BrowserModel: ObservableObject {
         const video = best();
         let media = video ? sourceOf(video) : '';
         const segmented = !!media && SEG.test(media);
-        // On renvoie l'URL reelle du flux, pas l'adresse de la page : le
-        // telechargeur natif sait traiter un m3u8, il ne sait pas analyser
-        // du HTML.
         window.webkit.messageHandlers.xgrab.postMessage({
           event: 'media',
           media: media || null,

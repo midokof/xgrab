@@ -24,31 +24,81 @@ final class AppDelegate: NSObject, UIApplicationDelegate {
 @main
 struct XGrabApp: App {
     @UIApplicationDelegateAdaptor(AppDelegate.self) private var delegate
+    @State private var tab: Tab = .browser
 
-    var body: some Scene {
-        WindowGroup {
-            TabView {
-                DownloadsView()
-                    .tabItem { Label("Fichiers", systemImage: "arrow.down.circle") }
+    enum Tab: String, CaseIterable {
+        case browser, files
 
-                BrowserView()
-                    .tabItem { Label("Navigateur", systemImage: "safari") }
-
-                ContentView()
-                    .tabItem { Label("PC", systemImage: "desktopcomputer") }
+        var title: String {
+            switch self {
+            case .browser: return "Navigateur"
+            case .files: return "Fichiers"
             }
-            .onAppear { drainPending() }
+        }
+
+        var symbol: String {
+            switch self {
+            case .browser: return "safari.fill"
+            case .files: return "arrow.down.doc.fill"
+            }
         }
     }
 
-    /// L'extension depose les liens dans le conteneur partage ; on les recupere
-    /// des que l'app est affichee.
-    private func drainPending() {
-        CrashLog.step("drainPending")
-        for request in PendingQueue.drain() {
-            for url in request.urls {
-                Downloader.shared.enqueue(url: url, referer: request.referer)
+    var body: some Scene {
+        WindowGroup {
+            ZStack(alignment: .bottom) {
+                // Le navigateur occupe tout l'ecran : la barre se pose par-dessus.
+                Group {
+                    switch tab {
+                    case .browser: BrowserView()
+                    case .files: DownloadsView()
+                    }
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+
+                tabBar
+                    .padding(.horizontal, 60)
+                    .padding(.bottom, 8)
+            }
+            .ignoresSafeArea(.keyboard, edges: .bottom)
+        }
+    }
+
+    private var tabBar: some View {
+        HStack(spacing: 4) {
+            ForEach(Tab.allCases, id: \.rawValue) { item in
+                Button {
+                    withAnimation(.spring(response: 0.32, dampingFraction: 0.78)) {
+                        tab = item
+                    }
+                } label: {
+                    VStack(spacing: 4) {
+                        Image(systemName: item.symbol)
+                            .font(.system(size: 17, weight: .semibold))
+                        Text(item.title)
+                            .font(.system(size: 10, weight: .semibold))
+                    }
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 9)
+                    .background(
+                        RoundedRectangle(cornerRadius: 13, style: .continuous)
+                            .fill(tab == item ? Theme.accentGradient : Color.clear)
+                    )
+                    .foregroundStyle(tab == item ? .white : .secondary)
+                    .shadow(color: Theme.accent.opacity(tab == item ? 0.35 : 0), radius: 8, y: 4)
+                }
+                .buttonStyle(.plain)
             }
         }
+        .padding(5)
+        .background(
+            RoundedRectangle(cornerRadius: 20, style: .continuous)
+                .fill(.ultraThinMaterial)
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 20, style: .continuous)
+                .strokeBorder(Color.primary.opacity(0.08), lineWidth: 1)
+        )
+        .shadow(color: .black.opacity(0.14), radius: 16, y: 6)
     }
 }

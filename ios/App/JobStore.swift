@@ -33,9 +33,14 @@ struct Job: Codable, Identifiable, Equatable {
 final class JobStore: ObservableObject {
     static let shared = JobStore()
 
-    /// Conteneur partage : l'extension ecrit, l'app affiche.
+    /// Conteneur partage quand il existe, sinon le dossier Documents de
+    /// l'app : sans l'extension, le groupe n'est plus garanti.
     static var containerURL: URL? {
-        FileManager.default.containerURL(forSecurityApplicationGroupIdentifier: "group.app.xgrab")
+        if let shared = FileManager.default
+            .containerURL(forSecurityApplicationGroupIdentifier: "group.app.xgrab") {
+            return shared
+        }
+        return FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first
     }
 
     static var storeURL: URL? {
@@ -52,6 +57,14 @@ final class JobStore: ObservableObject {
     }
 
     // ------------------------------------------------------------- persistance
+
+    /// Relit le fichier. Le drapeau `didLoad` est remis a zero pour ne pas
+    /// bloquer une relecture explicite.
+    func reload() {
+        UserDefaults.standard.set(false, forKey: key)
+        load()
+        UserDefaults.standard.set(true, forKey: key)
+    }
 
     private func load() {
         guard !UserDefaults.standard.bool(forKey: key) else { return }
