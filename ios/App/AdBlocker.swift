@@ -15,6 +15,16 @@ import WebKit
 ///  * un nettoyage périodique des superpositions de type popunder.
 enum AdBlocker {
 
+    /// Interrupteur utilisateur. Un bloqueur peut casser un site : il faut
+    /// pouvoir le couper sur place.
+    static var isEnabled: Bool {
+        get {
+            if UserDefaults.standard.object(forKey: "blocker.on") == nil { return true }
+            return UserDefaults.standard.bool(forKey: "blocker.on")
+        }
+        set { UserDefaults.standard.set(newValue, forKey: "blocker.on") }
+    }
+
     // MARK: - Hôtes publicitaires
 
     private static let hosts = [
@@ -76,7 +86,8 @@ enum AdBlocker {
 
     /// Tente d'installer la liste de règles native. En cas d'échec, la couche
     /// JavaScript prend le relais : le blocage n'est jamais absent.
-    static func installNative(into controller: WKUserContentController) {
+    static func installNative(into controller: WKUserContentController,
+                               then: @escaping (String) -> Void) {
         guard let url = Bundle.main.url(forResource: "blockerList", withExtension: "json"),
               let data = try? Data(contentsOf: url),
               let json = String(data: data, encoding: .utf8) else {
@@ -90,6 +101,7 @@ enum AdBlocker {
         // nil. Dans ce cas la couche JavaScript assure le blocage seule.
         guard let store = WKContentRuleListStore.default() else {
             CrashLog.step("AdBlocker: store indisponible, JS actif")
+            DispatchQueue.main.async { then("JS") }
             return
         }
 
@@ -103,11 +115,13 @@ enum AdBlocker {
                 guard let list = list else {
                     let ns = error as NSError?
                     CrashLog.step("AdBlocker: natif KO domaine=\(ns?.domain ?? "?") code=\(ns?.code ?? -1)")
+                    DispatchQueue.main.async { then("JS") }
                     return
                 }
                 DispatchQueue.main.async {
                     controller.add(list)
                     CrashLog.step("AdBlocker: liste native installee")
+                    then("natif")
                 }
             }
         }

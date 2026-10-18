@@ -9,12 +9,16 @@ import WebKit
 struct BrowserView: View {
     @StateObject private var model = BrowserModel()
 
+    /// Visible dans la barre d'etat.
+    private static var buildLabel: String { BrowserModel.buildLabel }
+
     var body: some View {
         ZStack(alignment: .bottom) {
             VStack(spacing: 0) {
                 addressBar
                 Divider()
                 WebViewRepresentable(model: model)
+                    .id(model.webEpoch)
             }
 
             downloadButton
@@ -109,8 +113,47 @@ struct BrowserView: View {
             }
 
             chooser
+            status
         }
         .background(.bar)
+    }
+
+    /// Bandeau d'etat : la version installee, l'etat du bloqueur et le nombre
+    /// de flux detectes. Un coup d'oeil suffit a diagnostiquer.
+    private var status: some View {
+        HStack(spacing: 6) {
+            Text(BrowserView.buildLabel)
+                .font(.system(size: 9, weight: .semibold))
+                .foregroundStyle(.secondary)
+
+            StatusPill(
+                title: model.blockerOn ? "BLOCAGE \(model.blockerMode.uppercased())" : "BLOCAGE OFF",
+                colour: model.blockerOn ? Theme.success : .secondary
+            )
+
+            let found = model.candidates.filter { !$0.isAd }.count
+            StatusPill(
+                title: "\(model.candidates.count) FLUX · \(found) VIDÉO\(found > 1 ? "S" : "")",
+                colour: found > 0 ? Theme.accent : .secondary
+            )
+
+            if let error = model.probeError {
+                StatusPill(title: "ERREUR", colour: Theme.danger)
+            }
+
+            Spacer()
+
+            Button {
+                model.toggleBlocker()
+            } label: {
+                Text(model.blockerOn ? "couper" : "activer")
+                    .font(.system(size: 9, weight: .bold))
+            }
+            .buttonStyle(.plain)
+            .foregroundStyle(model.blockerOn ? Theme.danger : Theme.success)
+        }
+        .padding(.horizontal, Theme.gutter + 4)
+        .padding(.bottom, 4)
     }
 
     /// Plusieurs lecteurs sur la page : l'utilisateur choisit lequel garder.
@@ -200,7 +243,14 @@ private struct WebViewRepresentable: UIViewRepresentable {
         config.userContentController.add(context.coordinator, name: "xgrab")
         // Le blocage JavaScript ne depend d'aucun stockage : il est toujours
         // present, contrairement au bloqueur natif.
-        config.userContentController.addUserScript(AdBlocker.blocker())
+        if AdBlocker.isEnabled {
+            config.userContentController.addUserScript(AdBlocker.blocker())
+            AdBlocker.installNative(into: config.userContentController) { mode in
+                model.blockerMode = mode
+            }
+        } else {
+            model.blockerMode = "désactivé"
+        }
         // La sonde est enregistree comme script de document : elle attend
         // ainsi le <video> depuis sa creation, au lieu d'apparaitre apres
         // didFinish, qui peut ne jamais survenir sur une page video.
@@ -209,7 +259,7 @@ private struct WebViewRepresentable: UIViewRepresentable {
                          injectionTime: .atDocumentStart,
                          forMainFrameOnly: false)
         )
-        AdBlocker.installNative(into: config.userContentController)
+        context.coordinator.model = model
 
         // Un cadre non nul evite l'ecran blanc sur les WKWebView crees hors
         // d'une hierarchie de vues deja cassee.
@@ -369,6 +419,29 @@ struct Candidate: Identifiable {
     /// Tous les flux detectes, pour que l'utilisateur puisse trancher.
     @Published private(set) var candidates: [Candidate] = []
     @Published var pickedURL: String?
+    /// Derniere erreur de la sonde, affichee dans l'interface.
+    @Published private(set) var probeError: String?
+    /// "natif", "JS" ou "désactivé".
+    @Published private(set) var blockerMode = "JS"
+    @Published private(set) var blockerOn = AdBlocker.isEnabled
+
+    /// Coupe ou relance le bloqueur sans reinstaller l'app.
+    func toggleBlocker() {
+        let next = !blockerOn
+        AdBlocker.isEnabled = next
+        blockerOn = next
+        blockerMode = next ? "JS" : "désactivé"
+        hint = next ? "Bloqueur activé" : "Bloqueur désactivé"
+        webEpoch += 1
+    }
+
+    /// Force la reconstruction du WKWebView, donc la reinjection des scripts.
+    func reloadWebView() {
+        webEpoch += 1
+    }
+
+    /// Changer cette valeur recree le WKWebView.
+    @Published private(set) var webEpoch = 0
 
     private weak var web: WKWebView?
     private var shown = ""
@@ -427,7 +500,8 @@ struct Candidate: Identifiable {
             let value = body["url"] as? String ?? ""
             if value != shown { shown = value; address = value }
         case "probe-error":
-            CrashLog.step("sonde: ERREUR \(body["message"] ?? "?")")
+            probeError = (body["message"] as? String) ?? "erreur inconnue"
+            CrashLog.step("sonde: ERREUR \(probeError ?? "")")
         case "button":
             if body["state"] as? String == "placed" {
                 CrashLog.step("sonde: bouton pose \((body["h"] as? Int) ?? 0)p")
@@ -825,9 +899,6 @@ private extension BrowserModel {
         if (button && button.parentElement) button.remove();
         button = null;
         buttonFor = null;
-        // Le retrait vient de nous : on laisse l'observateur respirer.
-        window.__xgrabBusy = true;
-        setTimeout(function () { window.__xgrabBusy = false; }, 0);
       }
 
       function report() {
@@ -875,53 +946,16 @@ private extension BrowserModel {
         report();
       };
 
-      // Nos propres insertions doivent etre ignorees : sinon l'observateur
-      // relance la sonde, qui recree le bouton, qui relance l'observateur.
-      // La page se met a vibrer et le clic sur la video devient impossible.
-      function isOurs(nodes) {
-        for (var i = 0; i < nodes.length; i++) {
-          const n = nodes[i];
-          if (!n || n.nodeType !== 1) continue;
-          if (n.hasAttribute && n.hasAttribute('data-xgrab-ui')) return true;
-          if (n.querySelector && n.querySelector('[data-xgrab-ui]')) return true;
-        }
-        return false;
-      }
-
-      new MutationObserver(function (records) {
-        if (window.__xgrabBusy) return;
-        let foreign = false;
-        for (let i = 0; i < records.length; i++) {
-          if (!isOurs(records[i].addedNodes)) { foreign = true; break; }
-        }
-        if (!foreign) return;
-        clearTimeout(window.__xgrabTimer);
-        window.__xgrabTimer = setTimeout(report, 600);
-      }).observe(document.documentElement, { childList: true, subtree: true });
-
-      // Un flux peut etre injecte par attribut sans changer le DOM : on
-      // surveille aussi les attributs src des <video> et <source>.
-      new MutationObserver(function (records) {
-        for (const r of records) {
-          if (r.type === 'attributes' && r.target &&
-              r.target.hasAttribute && r.target.hasAttribute('data-xgrab-ui')) continue;
-          report();
-          return;
-        }
-      }).observe(document.documentElement, {
-        attributes: true,
-        attributeFilter: ['src'],
-        subtree: true,
-      });
-
-      // Le flux n'apparait souvent qu'apres le lancement de la lecture.
+      // Aucun MutationObserver ici : observer une page que l'on modifie soi-meme
+      // cree une boucle (on insere le bouton, ce qui relance la sonde, qui
+      // recree le bouton...). Une simple interrogation periodique est stable
+      // et suffit largement.
       for (const type of ['play', 'playing', 'loadedmetadata', 'canplay',
-                          'durationchange', 'progress']) {
+                          'durationchange', 'sourcechange']) {
         document.addEventListener(type, function () { report(); }, true);
       }
-      document.addEventListener('sourcechange', function () { report(); }, true);
 
-      window.__xgrabTimer = setInterval(report, 1500);
+      window.__xgrabTimer = setInterval(report, 1000);
       report();
     })();
     """
