@@ -85,7 +85,13 @@ enum AdBlocker {
         }
 
         let identifier = "app.xgrab.blocker"
-        let store = WKContentRuleListStore.default()
+
+        // `default()` est optionnel : sur une app non signee, il peut etre
+        // nil. Dans ce cas la couche JavaScript assure le blocage seule.
+        guard let store = WKContentRuleListStore.default() else {
+            CrashLog.step("AdBlocker: store indisponible, JS actif")
+            return
+        }
 
         // Un identifiant déjà occupé par un contenu différent fait échouer le
         // stockage : on efface d'abord.
