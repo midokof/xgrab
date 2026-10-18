@@ -87,9 +87,7 @@ enum CrashLog {
         let length = strlen(buffer)
         guard length > 0 else { return }
         buffer.withMemoryRebound(to: UInt8.self, capacity: 256) { raw in
-            if let base = raw.baseAddress {
-                _ = write(descriptor, base, length)
-            }
+            _ = write(descriptor, raw, length)
         }
     }
 }
