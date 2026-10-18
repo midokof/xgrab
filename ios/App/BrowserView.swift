@@ -426,6 +426,8 @@ struct Candidate: Identifiable {
         case "url":
             let value = body["url"] as? String ?? ""
             if value != shown { shown = value; address = value }
+        case "dom-download":
+            receiveInline(body)
         case "media":
             let found = body["media"] as? String
             let video = (body["hasVideo"] as? Bool) ?? false
@@ -470,6 +472,49 @@ struct Candidate: Identifiable {
         }
     }
 
+    /// Demande lancee par le bouton pose dans la page.
+    ///
+    /// Le bouton transmet l'URL et la resolution jouee ; l'User-Agent et le
+    /// cookie jar sont repris du WKWebView, plus complets que ce que la page
+    /// peut exposer.
+    private func receiveInline(_ body: [String: Any]) {
+        guard let url = body["url"] as? String, !url.isEmpty else { return }
+        let height = (body["h"] as? Int) ?? 0
+        let page = (body["page"] as? String) ?? shown
+        let title = blank(body["title"] as? String)
+
+        CrashLog.step("page: bouton inline, \(height)p")
+
+        guard let web = web else {
+            hint = "Le navigateur n'est pas prêt"
+            return
+        }
+
+        web.evaluateJavaScript("navigator.userAgent") { [weak self] value, _ in
+            guard let self = self else { return }
+            let agent = (value as? String) ?? ""
+            web.configuration.websiteDataStore.httpCookieStore.getAllCookies { cookies in
+                let header = self.cookieHeader(cookies, for: url)
+                DispatchQueue.main.async {
+                    let name = Downloader.cleanName(url: url, height: height, fallback: title)
+                    guard Downloader.shared.enqueue(
+                        url: url,
+                        referer: page,
+                        userAgent: agent,
+                        cookies: header,
+                        filename: name,
+                        height: height > 0 ? height : nil,
+                        title: title
+                    ) != nil else {
+                        self.hint = "Lien non téléchargeable"
+                        return
+                    }
+                    self.hint = "\(name) ajouté aux fichiers"
+                }
+            }
+        }
+    }
+
     private func updateHint() {
         guard hasVideo else {
             hint = "Aucune vidéo détectée sur cette page."
@@ -488,6 +533,15 @@ struct Candidate: Identifiable {
 
     /// Flux que l'utilisateur a choisi manuellement, sinon le meilleur.
     var chosenURL: String? { pickedURL ?? mediaURL }
+}
+
+private extension BrowserModel {
+    /// Nil si la chaine est vide ou uniquement composee d'espaces.
+    func blank(_ text: String?) -> String? {
+        guard let text = text?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !text.isEmpty else { return nil }
+        return text
+    }
 
     /// Une navigation annulee (-999) est normale : elle est remplacee par la
     /// suivante. Seul le dernier echec reel est affiche.
@@ -649,6 +703,78 @@ struct Candidate: Identifiable {
         };
       }
 
+      // Bouton deplace dans la page, juste sous le lecteur. Il n'apparait
+      // que pour un flux reellement transmissible, et affiche la resolution
+      // que la balise video joue en ce moment.
+      var button = null;
+      var buttonFor = null;
+
+      function label(video) {
+        const h = video.videoHeight || 0;
+        return h > 0 ? h + 'p' : '';
+      }
+
+      function place(video) {
+        const url = sourceOf(video);
+        if (!url) { drop(); return; }
+
+        const parent = video.parentElement;
+        if (!parent) { drop(); return; }
+        const host = parent.tagName === 'A' ? (parent.parentElement || parent) : parent;
+
+        if (buttonFor === video && button.parentElement === host) {
+          const text = button.querySelector('span');
+          if (text) text.textContent = 'Télécharger' + (label(video) ? ' ' + label(video) : '');
+          return;
+        }
+        drop();
+
+        const box = document.createElement('div');
+        box.setAttribute('data-xgrab-ui', '1');
+        box.style.cssText = 'margin:10px auto;display:block;width:max-content;' +
+                            'font-family:-apple-system,system-ui,sans-serif;';
+
+        const btn = document.createElement('button');
+        btn.type = 'button';
+        btn.style.cssText = [
+          'display:inline-flex', 'align-items:center', 'gap:8px',
+          'padding:10px 20px', 'border:0', 'border-radius:999px',
+          'background:linear-gradient(135deg,#4d90fe,#2f5bb7)',
+          'color:#fff', 'font-size:14px', 'font-weight:700',
+          'cursor:pointer', 'box-shadow:0 6px 18px rgba(77,144,254,.45)',
+        ].join(';');
+
+        const text = document.createElement('span');
+        text.textContent = 'Télécharger' + (label(video) ? ' ' + label(video) : '');
+        btn.appendChild(text);
+
+        btn.addEventListener('click', function (event) {
+          event.preventDefault();
+          event.stopPropagation();
+          const now = sourceOf(video);
+          if (!now) return;
+          window.webkit.messageHandlers.xgrab.postMessage({
+            event: 'dom-download',
+            url: now,
+            w: video.videoWidth || 0,
+            h: video.videoHeight || 0,
+            page: location.href,
+            title: (document.title || '').trim(),
+          });
+        }, true);
+
+        box.appendChild(btn);
+        host.insertBefore(box, video.nextSibling);
+        buttonFor = video;
+        button = box;
+      }
+
+      function drop() {
+        if (button && button.parentElement) button.remove();
+        button = null;
+        buttonFor = null;
+      }
+
       function report() {
         const videos = Array.from(document.querySelectorAll('video'));
         const list = videos.map(describe).filter((d) => d.url);
@@ -658,6 +784,15 @@ struct Candidate: Identifiable {
         const clean = list.filter((d) => !d.ad);
         const pool = clean.length ? clean : list;
         const best = pool[0] || null;
+
+        try {
+          if (best) {
+            const chosen = videos.find((v) => sourceOf(v) === best.url);
+            if (chosen) place(chosen); else drop();
+          } else {
+            drop();
+          }
+        } catch (err) {}
 
         window.webkit.messageHandlers.xgrab.postMessage({
           event: 'media',

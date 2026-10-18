@@ -46,6 +46,38 @@ final class Downloader: NSObject, ObservableObject {
         return components
     }
 
+    /// Nom de fichier propre : sans jeton ni extension, suffixe par la
+    /// resolution demandee. `video-720p.mp4` plutot que
+    /// `a3f9b2.mp4?token=…`.
+    static func cleanName(url: String, height: Int?, fallback: String?) -> String {
+        var base = (URL(string: url)?.lastPathComponent ?? "")
+            .removingPercentEncoding ?? ""
+        base = (base as NSString).deletingPathExtension
+        base = base.components(separatedBy: CharacterSet(charactersIn: "-_ "))
+            .filter { !$0.isEmpty }
+            .joined(separator: "-")
+
+        if base.count < 3, let title = fallback, !title.isEmpty {
+            base = title
+                .replacingOccurrences(of: "[^A-Za-z0-9]+", with: "-", options: .regularExpression)
+                .trimmingCharacters(in: CharacterSet(charactersIn: "-"))
+        }
+        if base.isEmpty { base = "video" }
+        if base.count > 60 { base = String(base.prefix(60)) }
+
+        // Un flux HLS est toujours assemble en MP4 par le systeme.
+        let isSegmented = isHLS(url) || isDASH(url)
+        let ext = isSegmented || !url.lowercased().contains(".webm") ? "mp4" : "webm"
+        let suffix = (height ?? 0) > 0 ? "-\(height ?? 0)p" : ""
+        return "\(base)\(suffix).\(ext)"
+    }
+
+    /// Nom de titre pour AVAssetDownloadURLSession : sans extension, iOS
+    /// ajoute lui-meme le conteneur `.mp4`.
+    static func assetTitle(for filename: String) -> String {
+        (filename as NSString).deletingPathExtension
+    }
+
     /// Un CDN qui refuse URLSession verifie l'empreinte TLS du client, pas
     /// seulement les en-tetes. On passe alors la main au moteur WebKit, qui
     /// passe toujours.
@@ -120,29 +152,42 @@ final class Downloader: NSObject, ObservableObject {
     // -------------------------------------------------------------------- actions
 
     @discardableResult
-    func enqueue(url: String, referer: String, userAgent: String? = nil, cookies: String? = nil) -> Job? {
-        CrashLog.step("enqueue: \(url.prefix(80))")
+    func enqueue(url: String,
+                 referer: String,
+                 userAgent: String? = nil,
+                 cookies: String? = nil,
+                 filename: String? = nil,
+                 height: Int? = nil,
+                 title: String? = nil) -> Job? {
+        CrashLog.step("enqueue: \(url.prefix(70)) hauteur=\(height ?? 0)")
         guard let parsed = URL(string: url),
               parsed.scheme?.lowercased() == "http" || parsed.scheme?.lowercased() == "https" else {
             CrashLog.step("enqueue: URL refusee")
             return nil
         }
 
-        let job = JobStore.shared.enqueue(
-            url: url,
-            referer: referer,
-            userAgent: userAgent,
-            cookies: cookies
-        )
-        CrashLog.step("enqueue: job \(job.id) cree")
-
         if Self.isDASH(url) {
+            let job = JobStore.shared.enqueue(
+                url: url, referer: referer, userAgent: userAgent,
+                cookies: cookies, height: height
+            )
             JobStore.shared.update(id: job.id) {
                 $0.state = .failed
                 $0.error = "Flux DASH non supporte sur iOS"
             }
             return job
         }
+
+        let name = filename ?? Self.cleanName(url: url, height: height, fallback: title)
+        let job = JobStore.shared.enqueue(
+            url: url,
+            referer: referer,
+            userAgent: userAgent,
+            cookies: cookies,
+            filename: name,
+            height: height
+        )
+        CrashLog.step("enqueue: \(name)")
 
         var request = URLRequest(url: parsed)
         if !referer.isEmpty {
@@ -158,29 +203,50 @@ final class Downloader: NSObject, ObservableObject {
         }
 
         if Self.isHLS(url) {
-            // AVURLAsset doit porter les memes en-tetes que le navigateur,
-            // sinon le CDN refuse le manifeste ou les segments.
-            var headers: [String: String] = [:]
-            if let agent = userAgent, !agent.isEmpty { headers["User-Agent"] = agent }
-            if let jar = cookies, !jar.isEmpty { headers["Cookie"] = jar }
-            if !referer.isEmpty { headers["Referer"] = referer }
+            // Le manifeste maitre propose plusieurs qualites : on retient celle
+            // qui correspond a la resolution en cours de lecture avant de
+            // laisser AVFoundation telecharger.
+            let start: (URL) -> Void = { target in
+                var headers: [String: String] = [:]
+                if let agent = userAgent, !agent.isEmpty { headers["User-Agent"] = agent }
+                if let jar = cookies, !jar.isEmpty { headers["Cookie"] = jar }
+                if !referer.isEmpty { headers["Referer"] = referer }
 
-            // La constante Swift n'est pas exposee : on utilise la cle
-            // litterale attendue par AVURLAsset.
-            let headerKey = "AVURLAssetHTTPHeaderFieldsKey"
-            let options: [String: Any] = headers.isEmpty
-                ? [:]
-                : [headerKey: headers]
-            let asset = AVURLAsset(url: parsed, options: options)
-            let taskOptions: [String: Any] = [:]
-            let task = hls.makeAssetDownloadTask(
-                asset: asset,
-                assetTitle: job.filename,
-                assetArtworkData: nil,
-                options: taskOptions
-            )
-            task?.taskDescription = job.id
-            task?.resume()
+                // La constante Swift n'est pas exposee : on utilise la cle
+                // litterale attendue par AVURLAsset.
+                let headerKey = "AVURLAssetHTTPHeaderFieldsKey"
+                let options: [String: Any] = headers.isEmpty
+                    ? [:]
+                    : [headerKey: headers]
+                let asset = AVURLAsset(url: target, options: options)
+                let task = self.hls.makeAssetDownloadTask(
+                    asset: asset,
+                    assetTitle: Self.assetTitle(for: job.filename),
+                    assetArtworkData: nil,
+                    options: [:]
+                )
+                task?.taskDescription = job.id
+                task?.resume()
+                CrashLog.step("enqueue: variante \(target.lastPathComponent) (\(height ?? 0)p)")
+            }
+
+            guard let wanted = height, wanted > 0 else {
+                start(parsed)
+                JobStore.shared.update(id: job.id) { $0.state = .running }
+                return job
+            }
+
+            JobStore.shared.update(id: job.id) {
+                $0.state = .running
+                $0.error = "Lecture des qualités disponibles..."
+            }
+            HLSResolver.url(for: url, height: wanted, referer: referer,
+                            userAgent: userAgent, cookies: cookies) { picked in
+                DispatchQueue.main.async {
+                    start(URL(string: picked) ?? parsed)
+                    JobStore.shared.update(id: job.id) { $0.error = nil }
+                }
+            }
         } else {
             let task = downloads.downloadTask(with: request)
             task.taskDescription = job.id
@@ -213,7 +279,9 @@ final class Downloader: NSObject, ObservableObject {
             url: job.url,
             referer: job.referer,
             userAgent: job.userAgent,
-            cookies: job.cookies
+            cookies: job.cookies,
+            filename: job.filename,
+            height: job.height
         )
     }
 

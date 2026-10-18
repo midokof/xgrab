@@ -21,6 +21,10 @@ struct Job: Codable, Identifiable, Equatable {
 
     var addedAt: Date
 
+    /// Hauteur en pixels demandee au moment du lancement. Sert a choisir la
+    /// bonne variante HLS et a nommer le fichier.
+    var height: Int?
+
     /// Conserves pour pouvoir rejouer la requete : les CDN protegent
     /// souvent le fichier par le User-Agent et les cookies de session.
     var userAgent: String?
@@ -107,12 +111,17 @@ final class JobStore: ObservableObject {
     // ------------------------------------------------------------------ ecriture
 
     @discardableResult
-    func enqueue(url: String, referer: String, userAgent: String? = nil, cookies: String? = nil) -> Job {
+    func enqueue(url: String,
+                 referer: String,
+                 userAgent: String? = nil,
+                 cookies: String? = nil,
+                 filename: String? = nil,
+                 height: Int? = nil) -> Job {
         let job = Job(
             id: UUID().uuidString,
             url: url,
             referer: referer,
-            filename: Downloader.filename(for: url),
+            filename: filename ?? Downloader.filename(for: url),
             state: .queued,
             progress: 0,
             bytes: 0,
@@ -120,6 +129,7 @@ final class JobStore: ObservableObject {
             localPath: nil,
             isHLS: Downloader.isHLS(url),
             addedAt: Date(),
+            height: height,
             userAgent: userAgent,
             cookies: cookies
         )
