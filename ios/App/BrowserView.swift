@@ -426,6 +426,12 @@ struct Candidate: Identifiable {
         case "url":
             let value = body["url"] as? String ?? ""
             if value != shown { shown = value; address = value }
+        case "probe-error":
+            CrashLog.step("sonde: ERREUR \(body["message"] ?? "?")")
+        case "button":
+            if body["state"] as? String == "placed" {
+                CrashLog.step("sonde: bouton pose \((body["h"] as? Int) ?? 0)p")
+            }
         case "dom-download":
             receiveInline(body)
         case "media":
@@ -728,6 +734,11 @@ private extension BrowserModel {
           return;
         }
         drop();
+        window.webkit.messageHandlers.xgrab.postMessage({
+          event: 'button',
+          state: 'placed',
+          h: video.videoHeight || 0,
+        });
 
         const box = document.createElement('div');
         box.setAttribute('data-xgrab-ui', '1');
@@ -776,31 +787,43 @@ private extension BrowserModel {
       }
 
       function report() {
-        const videos = Array.from(document.querySelectorAll('video'));
-        const list = videos.map(describe).filter((d) => d.url);
-        list.sort((a, b) => b.score - a.score);
-
-        // On prefere toujours un candidat qui n'est pas une publicite.
-        const clean = list.filter((d) => !d.ad);
-        const pool = clean.length ? clean : list;
-        const best = pool[0] || null;
-
+        // Toute exception ici stopperait le setInterval et le bouton
+        // n'apparaitrait jamais : on isole et on continue.
         try {
+          const videos = Array.from(document.querySelectorAll('video'));
+          const list = videos.map(describe).filter((d) => d.url);
+          list.sort((a, b) => b.score - a.score);
+
+          // On prefere toujours un candidat qui n'est pas une publicite.
+          const clean = list.filter((d) => !d.ad);
+          const pool = clean.length ? clean : list;
+          const best = pool[0] || null;
+
           if (best) {
             const chosen = videos.find((v) => sourceOf(v) === best.url);
             if (chosen) place(chosen); else drop();
           } else {
             drop();
           }
-        } catch (err) {}
 
-        window.webkit.messageHandlers.xgrab.postMessage({
-          event: 'media',
-          media: best ? best.url : null,
-          segmented: !!best && SEG.test(best.url),
-          hasVideo: videos.length > 0,
-          list: list.slice(0, 8),
-        });
+          window.webkit.messageHandlers.xgrab.postMessage({
+            event: 'media',
+            media: best ? best.url : null,
+            segmented: !!best && SEG.test(best.url),
+            hasVideo: videos.length > 0,
+            list: list.slice(0, 8),
+          });
+        } catch (err) {
+          if (!window.__xgrabErr) {
+            window.__xgrabErr = true;
+            try {
+              window.webkit.messageHandlers.xgrab.postMessage({
+                event: 'probe-error',
+                message: String(err && err.message ? err.message : err),
+              });
+            } catch (ignored) {}
+          }
+        }
       }
 
       window.__xgrabProbe = function () {

@@ -12,7 +12,7 @@ import WebKit
 /// Trois couches indépendantes :
 ///  * une feuille de style qui masque les conteneurs d'encarts ;
 ///  * un observateur qui retire les `<script>` publicitaires à l'insertion ;
-///  * un correctif de `fetch` / `XMLHttpRequest` qui refuse les régies.
+///  * un nettoyage périodique des superpositions de type popunder.
 enum AdBlocker {
 
     // MARK: - Hôtes publicitaires
@@ -120,38 +120,34 @@ enum AdBlocker {
 
     private static let selectorsLiteral = selectors.joined(separator: ",")
 
-    /// Script principal : bloque les régies, les scripts publicitaires et les
-    /// popups. Injecté à chaque document, avant son analyse.
+    /// Script de blocage, volontairement minimal.
+    ///
+    /// Aucun correctif de `fetch`, de `XMLHttpRequest` ni de `window.open` :
+    /// ces trois noms sont verifies par les scripts anti-publicite. Des qu'ils
+    /// detectent la modification, ils couvrent la page et interdisent le
+    /// defilement — le bloqueur devient alors pire que les pubs.
+    ///
+    /// Ce qui reste est invisible a une detection : une feuille de style, le
+    /// retrait de noeuds publicitaires a leur insertion, et le nettoyage des
+    /// superpositions. Les popups, eux, sont bloques nativement par
+    /// `WKUIDelegate.createWebViewWith`, sans trace visible par la page.
     static func blocker() -> WKUserScript {
         let source = """
         (function () {
           var HOSTS = new RegExp('(^|\\\\.)($hostsLiteral)(:|$)|($hostsLiteral)', 'i');
           var CSS = '$selectorsLiteral';
 
-          // 1. Feuille de style : masque les encarts sans passer par le
-          //    bloqueur natif, qui n'est pas toujours disponible.
-          var stylePending = false;
           function injectStyle() {
-            if (document.getElementById('xgrab-block')) return true;
+            if (document.getElementById('xgrab-block')) return;
             var root = document.head || document.documentElement;
-            if (!root) {
-              // Tres tot dans le document, aucun noeud racine : on retente
-              // au prochain tick plutot que d'abandonner le script.
-              if (!stylePending) {
-                stylePending = true;
-                setTimeout(function () { stylePending = false; injectStyle(); }, 50);
-              }
-              return false;
-            }
+            if (!root) return;
             var style = document.createElement('style');
             style.id = 'xgrab-block';
             style.textContent = CSS + '{display:none !important;}';
             root.appendChild(style);
-            return true;
           }
 
-          // 2. Scripts publicitaires retirés dès leur insertion : retirer un
-          //    <script> déjà dans le DOM annule son chargement.
+          // Retirer un <script> deja insere annule son chargement.
           function audit(nodes) {
             for (var i = 0; i < nodes.length; i++) {
               var node = nodes[i];
@@ -167,67 +163,26 @@ enum AdBlocker {
             injectStyle();
             var root = document.documentElement;
             if (!root) {
-              setTimeout(watch, 50);
+              setTimeout(watch, 40);
               return;
             }
             new MutationObserver(function (records) {
-              for (var i = 0; i < records.length; i++) {
-                audit(records[i].addedNodes);
-              }
+              for (var i = 0; i < records.length; i++) audit(records[i].addedNodes);
             }).observe(root, { childList: true, subtree: true });
           }
 
-          // 3. Requêtes réseau vers les régies : refusées avant l'envoi.
-          function guard(method, url) {
-            try { return HOSTS.test(String(url)); } catch (e) { return false; }
-          }
-
-          var realFetch = window.fetch;
-          if (realFetch) {
-            window.fetch = function (input, init) {
-              var url = (input && input.url) ? input.url : input;
-              if (guard('fetch', url)) {
-                return Promise.reject(new Error('XGrab: regie bloquee'));
-              }
-              return realFetch.apply(this, arguments);
-            };
-          }
-
-          var realOpen = XMLHttpRequest.prototype.open;
-          if (realOpen) {
-            XMLHttpRequest.prototype.open = function (method, url) {
-              if (guard(method, url)) {
-                try { this.abort(); } catch (e) {}
-                return;
-              }
-              return realOpen.apply(this, arguments);
-            };
-          }
-
-          // 4. Popups et popunders.
-          try {
-            Object.defineProperty(window, 'open', {
-              configurable: false, writable: false,
-              value: function () { return null; }
-            });
-          } catch (e) { window.open = function () { return null; }; }
-          try { window.name = ''; } catch (e) {}
-
           var OVERLAYS = '[class*="popunder"],[id*="popunder"],' +
-                         '[class*="onload-modal"],[class*="exit-intent"],' +
-                         '[id*="exit-intent"],[id*="popup-overlay"],' +
-                         '[id*="modal-overlay"],[id*="interstitial"]';
+                         '[class*="onload-modal"],[id*="popup-overlay"],' +
+                         '[id*="modal-overlay"]';
           setInterval(function () {
-            if (!document.querySelectorAll) return;
-            var nodes = document.querySelectorAll(OVERLAYS);
-            for (var i = 0; i < nodes.length; i++) nodes[i].remove();
+            try {
+              var nodes = document.querySelectorAll(OVERLAYS);
+              for (var i = 0; i < nodes.length; i++) nodes[i].remove();
+            } catch (e) {}
           }, 2000);
 
           watch();
-          document.addEventListener('DOMContentLoaded', function () {
-            injectStyle();
-            watch();
-          }, false);
+          document.addEventListener('DOMContentLoaded', injectStyle, false);
         })();
         """
 
