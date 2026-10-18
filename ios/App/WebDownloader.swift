@@ -30,34 +30,40 @@ final class WebDownloader: NSObject {
     ///     Referer et poser les cookies de session
     func start(jobID: String, url: URL, pageURL: URL?, filename: String) {
         CrashLog.step("WebDownloader: start pour \(url.lastPathComponent.prefix(40))")
-        DispatchQueue.main.async { self.startNow(jobID: jobID, url: url, pageURL: pageURL, filename: filename) }
+        // WKWebView doit etre cree et pilote depuis le main thread : le
+        // delegate URLSession appelle ceci depuis une file de fond.
+        DispatchQueue.main.async {
+            CrashLog.step("WebDownloader: sur le main")
+            self.startNow(jobID: jobID, url: url, pageURL: pageURL, filename: filename)
+        }
     }
 
     /// WKWebView doit etre cree et pilote depuis le main thread.
     private func startNow(jobID: String, url: URL, pageURL: URL?, filename: String) {
         stop()
-        CrashLog.step("WebDownloader: startNow sur le main")
-
+        CrashLog.step("startNow: 1 - stop() fait")
         self.jobID = jobID
         self.mediaURL = url.absoluteString
+        CrashLog.step("startNow: 2 - champs initialises")
 
         let config = WKWebViewConfiguration()
+        CrashLog.step("startNow: 3 - configuration creee")
         config.websiteDataStore = .default()
-        let view = WKWebView(frame: .zero, configuration: config)
+
+        let view = WKWebView(frame: CGRect(x: 0, y: 0, width: 1, height: 1), configuration: config)
+        CrashLog.step("startNow: 4 - WKWebView cree")
         view.navigationDelegate = self
         view.isHidden = true
         self.web = view
+        CrashLog.step("startNow: 5 - delegate pose")
 
         let folder = Downloader.mediaDirectory
         self.target = Self.unique(folder, filename)
+        CrashLog.step("startNow: 6 - destination \(self.target?.lastPathComponent ?? "?")")
 
-        if let pageURL = pageURL {
-            // La page d'abord : WebKit enverra son adresse comme Referer
-            // lors de la navigation vers le media, et partagera ses cookies.
-            view.load(URLRequest(url: pageURL))
-        } else {
-            view.load(URLRequest(url: url))
-        }
+        let start = pageURL ?? url
+        view.load(URLRequest(url: start))
+        CrashLog.step("startNow: 7 - chargement de \(start.lastPathComponent) lance")
     }
 
     func stop() {
