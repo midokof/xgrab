@@ -322,9 +322,11 @@ private final class ScriptBridge: NSObject, WKScriptMessageHandler {
 
     /// `BrowserModel` etant `@MainActor`, Swift infere cette propriete comme
     /// isolee sur le main et refuse qu'on la lise depuis la methode
-    /// `nonisolated` ci-dessous. Une reference faible n'a rien a proteger :
-    /// `nonisolated` le dit explicitement.
-    nonisolated weak var owner: BrowserModel?
+    /// `nonisolated` ci-dessous. Une reference faible n'a rien a proteger,
+    /// mais `nonisolated` seul ne s'applique pas a une propriete stockee
+    /// mutable : d'ou `nonisolated(unsafe)`. La valeur est posee une fois, a
+    /// l'initialisation, et seulement lue ensuite.
+    nonisolated(unsafe) weak var owner: BrowserModel?
 
     /// `nonisolated` explicite : `BrowserModel` est `@MainActor`, son temoin
     /// l'est aussi, et c'est ce marqueur qui rend l'appel legal d'ici.
