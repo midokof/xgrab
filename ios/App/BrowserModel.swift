@@ -229,8 +229,10 @@ final class BrowserModel: NSObject, ObservableObject {
             arguments: ["url": track.url, "height": track.height],
             in: nil,
             in: .page
-        ) { result in
+        ) { [weak self] result in
             Task { @MainActor in
+                // `[weak self]` est ce qui rend le `guard let` valable : sans
+                // liste de capture, `self` n'est pas optionnel ici.
                 guard let self = self else { return }
                 if case .success(let body as [String: Any]) = result {
                     self.acceptPlan(body)

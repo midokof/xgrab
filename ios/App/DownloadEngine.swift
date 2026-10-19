@@ -275,9 +275,9 @@ final class DownloadEngine: NSObject, ObservableObject {
         let name = MediaFile.makeName(url: plan.variant.absoluteString,
                                       height: height, title: title)
 
-        let job = JobStore.shared.add(url: url, referer: referer, userAgent: userAgent,
-                                      cookies: cookies, filename: name, height: height,
-                                      title: title)
+        let job = JobStore.shared.add(url: plan.manifest.absoluteString, referer: referer,
+                                      userAgent: userAgent, cookies: cookies.flat,
+                                      filename: name, height: height, title: title)
         titles.set(name, for: job.id)
         notice = "Téléchargement lancé"
 
@@ -811,7 +811,9 @@ final class HLSDownloader: @unchecked Sendable {
         // 4. Assemblage. Le fichier doit etre vide sur le disque avant que
         // `AVURLAsset` ne l'ouvre ; la fermeture est differee a la fin de la
         // fonction, on force donc l'ecriture ici.
-        try handle.synchronizeFile()
+        // `synchronizeFile` ne leve pas : il force l'ecriture sans garantie de
+        // retour.
+        handle.synchronizeFile()
 
         // Le format se decide sur ce que le manifeste annonce, le
         // test des octets ne servant qu'a confirmer le cas MPEG-2.

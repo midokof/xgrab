@@ -102,9 +102,12 @@ extension HLSPlan {
         guard let manifestText = body["manifest"] as? String,
               let manifest = URL(string: manifestText),
               let variantText = body["variant"] as? String,
-              let variant = URL(string: variantText),
-              let urls = HLSPlan.stringList(body["urls"]),
-              !urls.isEmpty else { return nil }
+              let variant = URL(string: variantText) else { return nil }
+
+        // `stringList` rend deja un tableau, optionnel ou non : l'ecrire
+        // dans un `guard let` ferait echouer la compilation.
+        let urls = HLSPlan.stringList(body["urls"])
+        guard !urls.isEmpty else { return nil }
 
         let keyIndexes = HLSPlan.intList(body["key"])
         let ivs = HLSPlan.stringList(body["iv"])
@@ -133,10 +136,12 @@ extension HLSPlan {
         built.reserveCapacity(urls.count)
         for (index, text) in urls.enumerated() {
             guard let url = URL(string: text) else { continue }
-            let keyIndex = value(keyIndexes, index, -1)
-            let iv = HLSCrypto.hex(value(ivs, index, ""))
-            let sequence = value(seqs, index, index)
-            let range = HLSCrypto.byteRange(value(ranges, index, ""))
+            // `value` est un membre statique : dans un `init`, le contexte est
+            // l'instance, il faut donc le nommer explicitement.
+            let keyIndex = Self.value(keyIndexes, index, -1)
+            let iv = HLSCrypto.hex(Self.value(ivs, index, ""))
+            let sequence = Self.value(seqs, index, index)
+            let range = HLSCrypto.byteRange(Self.value(ranges, index, ""))
             built.append(HLSSegment(url: url, keyIndex: keyIndex, iv: iv,
                                     sequence: sequence, range: range))
         }
@@ -145,7 +150,7 @@ extension HLSPlan {
         self.manifest = manifest
         self.variant = variant
         height = HLSPlan.int(body["height"])
-        duration = Double(HLSPlan.number(body["duration"]) ?? 0)
+        duration = (body["duration"] as? NSNumber)?.doubleValue ?? 0
         encrypted = (body["encrypted"] as? Bool) ?? false
         // Une cle non decodable devient une cle vide plutot que de disparaitre :
 // `HLSDownloader` la retelechargera, et les index restent alignes.
@@ -173,8 +178,6 @@ extension HLSPlan {
     private static func intList(_ any: Any?) -> [Int] {
         (any as? [Any])?.compactMap { ($0 as? NSNumber)?.intValue } ?? []
     }
-
-    private static func number(_ any: Any?) -> NSNumber? { any as? NSNumber }
 
     private static func int(_ any: Any?) -> Int {
         (any as? NSNumber)?.intValue ?? 0
