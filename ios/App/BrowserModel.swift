@@ -224,7 +224,8 @@ final class BrowserModel: NSObject, ObservableObject {
         // `callAsyncJavaScript:arguments:inFrame:inContentWorld:completionHandler:`,
         // et WebKit retranche `Frame` puis `ContentWorld` pour ne pas repeter
         // le type. Un seul `in:` ne compile pas.
-        _ = web.callAsyncJavaScript(
+        // La surcharge a gestionnaire rend `Void` : aucune valeur a ignorer.
+        web.callAsyncJavaScript(
             "return await window.__xgrabHLS.plan(url, height);",
             arguments: ["url": track.url, "height": track.height],
             in: nil,
@@ -319,7 +320,11 @@ final class BrowserModel: NSObject, ObservableObject {
 /// rien ne pourrait rompre : d'ou la reference faible.
 private final class ScriptBridge: NSObject, WKScriptMessageHandler {
 
-    weak var owner: BrowserModel?
+    /// `BrowserModel` etant `@MainActor`, Swift infere cette propriete comme
+    /// isolee sur le main et refuse qu'on la lise depuis la methode
+    /// `nonisolated` ci-dessous. Une reference faible n'a rien a proteger :
+    /// `nonisolated` le dit explicitement.
+    nonisolated weak var owner: BrowserModel?
 
     /// `nonisolated` explicite : `BrowserModel` est `@MainActor`, son temoin
     /// l'est aussi, et c'est ce marqueur qui rend l'appel legal d'ici.
