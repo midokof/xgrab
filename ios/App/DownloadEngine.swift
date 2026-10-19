@@ -18,6 +18,47 @@ enum MediaFile {
     static func isHLS(_ url: String) -> Bool { url.lowercased().contains(".m3u8") }
     static func isDASH(_ url: String) -> Bool { url.lowercased().contains(".mpd") }
 
+    /// Noms de fichiers que les CDN donnent a un manifeste sans extension :
+    /// `/playlist`, `/manifest`, `/master`. Sans cette detection, l'application
+    /// sauvegarde le texte du manifeste dans un fichier intititule `.mp4`.
+    ///
+    /// Volontairement absent : `index`. Trop d'adresses directes se terminent
+    /// ainsi, et le juge de paix reste le corps de la reponse.
+    private static let manifestNames: Set<String> = [
+        "playlist", "manifest", "master", "chunklist", "media",
+    ]
+
+    /// Heuristique : vrai pour un manifeste a forte probabilite, faux ne
+    /// garantit pas un fichier direct. Le juge de paix reste le corps de la
+    /// reponse, qui commence par `#EXTM3U`.
+    static func looksLikeManifest(_ url: String) -> Bool {
+        if isHLS(url) || isDASH(url) { return true }
+        guard let path = URL(string: url)?.path.lowercased() else { return false }
+        guard let last = path.split(separator: "/").last else { return false }
+        return manifestNames.contains(String(last))
+    }
+
+    /// Noms que tous les CDN donnent a leur manifeste. Ils ne renseignent
+    /// personne : un fichier `index-720p.mp4` est inexploitable dans le
+    /// dossier telechargements, la ou le titre de la video l'est.
+    private static let genericNames: Set<String> = [
+        "index", "master", "manifest", "playlist", "media", "stream",
+        "video", "chunklist", "main", "playlist0", "list",
+    ]
+
+    /// Un nom muet : surtout hexadecimal, avec au plus un prefixe — les
+    /// identifiants de session que les CDN inventent n'ont aucun sens pour
+    /// l'utilisateur.
+    private static func isOpaque(_ name: String) -> Bool {
+        guard name.count >= 8 else { return false }
+        var hex = 0
+        var other = 0
+        for character in name {
+            if character.isHexDigit { hex += 1 } else { other += 1 }
+        }
+        return other <= 2 && hex >= 8
+    }
+
     /// Nom propre, sans jeton, suffixe par la resolution.
     static func makeName(url: String, height: Int?, title: String?) -> String {
         var base = (URL(string: url)?.lastPathComponent ?? "").removingPercentEncoding ?? ""
@@ -27,7 +68,11 @@ enum MediaFile {
             .filter { !$0.isEmpty }
             .joined(separator: "-")
 
-        if base.count < 3, let title = title, !title.isEmpty {
+        let vague = base.count < 3
+            || genericNames.contains(base.lowercased())
+            || isOpaque(base)
+
+        if vague, let title = title, !title.isEmpty {
             base = title
                 .replacingOccurrences(of: "[^A-Za-z0-9]+", with: "-", options: .regularExpression)
                 .trimmingCharacters(in: CharacterSet(charactersIn: "-"))
@@ -183,11 +228,12 @@ final class DownloadEngine: NSObject, ObservableObject {
         }
 
         let job = JobStore.shared.add(url: url, referer: referer, userAgent: userAgent,
-                                      cookies: cookies, filename: name, height: height)
+                                      cookies: cookies, filename: name, height: height,
+                                      title: title)
         titles.set(name, for: job.id)
         notice = "Téléchargement lancé"
 
-        if MediaFile.isHLS(url) {
+        if MediaFile.looksLikeManifest(url) {
             JobStore.shared.update(id: job.id) {
                 $0.state = .running
                 $0.error = "Lecture des qualités…"
@@ -205,6 +251,114 @@ final class DownloadEngine: NSObject, ObservableObject {
                         userAgent: userAgent, cookies: cookies)
         }
         return job.id
+    }
+
+    // MARK: - Flux HLS
+
+    /// Point d'entree unique des flux segmentes.
+    ///
+    /// Un flux **en clair** passe par `AVAssetDownloadURLSession` : c'est le
+    /// chemin qui fonctionne, il survit a une suspension de l'app et produit un
+    /// conteneur propre.
+    ///
+    /// Un flux **chiffre** passe par `HLSDownloader`. Pas par choix :
+    /// `AVAssetDownloadURLSession` accepte la tache, ne leve aucune erreur et
+    /// n'appelle jamais aucun delegate. Le job reste « en cours » indefini.
+    @discardableResult
+    func launch(plan: HLSPlan,
+                referer: String,
+                userAgent: String?,
+                cookies: CookieJar,
+                title: String?) -> String? {
+
+        let height = plan.height > 0 ? plan.height : nil
+        let name = MediaFile.makeName(url: plan.variant.absoluteString,
+                                      height: height, title: title)
+
+        let job = JobStore.shared.add(url: url, referer: referer, userAgent: userAgent,
+                                      cookies: cookies, filename: name, height: height,
+                                      title: title)
+        titles.set(name, for: job.id)
+        notice = "Téléchargement lancé"
+
+        if let blocked = plan.unsupportedMethod() {
+            let reason = HLSError.unsupported(blocked).errorDescription ?? "Chiffrement non pris en charge"
+            JobStore.shared.update(id: job.id) {
+                $0.state = .failed
+                $0.error = reason
+            }
+            return job.id
+        }
+
+        if plan.encrypted {
+            JobStore.shared.update(id: job.id) { $0.error = "Lecture du flux chiffré…" }
+            HLSDownloader.shared.run(plan: plan, jobID: job.id, name: name,
+                                     referer: referer, userAgent: userAgent,
+                                     jar: cookies)
+        } else {
+            // `plan.variant` est deja un manifeste media : la variante a ete
+            // choisie en amont. Relire le manifeste ici ne ferait qu'ajouter
+            // un aller-retour et ne changerait rien.
+            //
+            // Le `Cookie` est restreint a l'hote du media : transmettre tout le
+            // magasin du navigateur au CDN serait divulguer des sessions
+            // etrangeres au flux demande.
+            JobStore.shared.update(id: job.id) { $0.error = "Téléchargement du flux…" }
+            startHLS(jobID: job.id, url: plan.variant.absoluteString, name: name,
+                     referer: referer, userAgent: userAgent,
+                     cookies: cookies.header(for: plan.variant))
+        }
+        return job.id
+    }
+
+    /// Repli quand le plan n'a pas pu etre construit dans la page : CORS, ou
+    /// script absent parce que le blocage est coupe.
+    ///
+    /// Le `WKWebView` n'a pas toujours les memes droits que la page sur un
+    /// manifeste tiers. Sans ce repli, l'echec serait definitif.
+    func enqueueHLSNatively(manifest: String,
+                            height: Int,
+                            referer: String,
+                            userAgent: String?,
+                            cookies: CookieJar,
+                            title: String?) {
+        guard let url = URL(string: manifest), url.scheme != nil else {
+            notice = "Lien de flux invalide"
+            return
+        }
+        notice = "Lecture du flux…"
+        CrashLog.step("plan HLS natif : \(manifest.prefix(70))")
+
+        Task {
+            do {
+                let plan = try await HLSFetcher.plan(manifest: url, height: height,
+                                                     referer: referer,
+                                                     userAgent: userAgent,
+                                                     cookies: cookies)
+                _ = launch(plan: plan, referer: referer, userAgent: userAgent,
+                           cookies: cookies, title: title)
+            } catch {
+                let reason = (error as? LocalizedError)?.errorDescription
+                    ?? error.localizedDescription
+
+                // Le predicat « manifeste » est une heuristique : des CDN
+                // nomment leurs fichiers `/playlist` sans extension, mais la
+                // meme forme peut designer un fichier direct. Plutot que de
+                // declarer forfait, on tente le telechargement brut.
+                if !MediaFile.isHLS(manifest) {
+                    CrashLog.step("pas un manifeste, telechargement direct : "
+                                  + "\(manifest.prefix(50))")
+                    _ = enqueue(url: manifest, referer: referer,
+                                userAgent: userAgent,
+                                cookies: cookies.flat,
+                                height: height > 0 ? height : nil,
+                                title: title)
+                } else {
+                    notice = reason
+                    CrashLog.step("plan HLS natif en echec : \(reason)")
+                }
+            }
+        }
     }
 
     private func startDirect(jobID: String, url: URL, name: String,
@@ -266,6 +420,9 @@ final class DownloadEngine: NSObject, ObservableObject {
         hls.getAllTasks { tasks in
             tasks.first { $0.taskDescription == jobID }?.cancel()
         }
+        // Le chemin natif n'a pas de tete URLSession a annuler : c'est la
+        // boucle entre les segments qu'il faut interrompre.
+        HLSDownloader.shared.stop(jobID)
         JobStore.shared.update(id: jobID) {
             $0.state = .failed
             $0.error = "Annulé"
@@ -275,8 +432,22 @@ final class DownloadEngine: NSObject, ObservableObject {
     func retry(jobID: String) {
         guard let job = JobStore.shared.job(id: jobID) else { return }
         JobStore.shared.remove(id: jobID)
+
+        // Un flux segmente ne repasse jamais par `AVAssetDownloadURLSession` :
+        // c'est precisement le chemin qui echoue en silence. Le plan est
+        // reconstruit, et c'est lui qui decidera du chemin a prendre.
+        if MediaFile.looksLikeManifest(job.url) {
+            enqueueHLSNatively(manifest: job.url,
+                               height: job.height ?? 0,
+                               referer: job.referer,
+                               userAgent: job.userAgent,
+                               cookies: CookieJar(header: job.cookies),
+                               title: job.title)
+            return
+        }
+
         enqueue(url: job.url, referer: job.referer, userAgent: job.userAgent,
-                cookies: job.cookies, height: job.height, title: nil)
+                cookies: job.cookies, height: job.height, title: job.title)
     }
 
     func delete(jobID: String) {
@@ -428,6 +599,273 @@ extension DownloadEngine: AVAssetDownloadDelegate {
                 $0.error = nil
             }
             CrashLog.step("HLS termine : \(target.lastPathComponent)")
+        }
+    }
+}
+
+// MARK: - Flux HLS chiffre
+
+/// Telechargement, dechiffrement et assemblage d'un flux HLS chiffre.
+///
+/// Tout se passe hors du main actor : une heure de video represente plusieurs
+/// centaines de requetes et aucun de ces pas n'a besoin de l'interface.
+///
+/// L'assemblage depend du format, et se decide sur les octets reels plutot
+/// que sur le manifeste :
+///
+///  * des segments MPEG-2 concatenes forment un `.ts` valide qu'il faut
+///    remuxer en MP4 — `AVAssetExportSession` le fait sans recompresser ;
+///  * des fragments MP4 (`EXT-X-MAP` + `.m4s`) forment deja un fichier
+///    ISO-BMFF complet une fois le segment d'initialisation prepended.
+final class HLSDownloader: @unchecked Sendable {
+
+    static let shared = HLSDownloader()
+
+    /// Quatre requetes simultanees : au-dela, le CDN commence a renvoyer des
+    /// 429 et le gain devient nul.
+    private let window = 4
+
+    private let lock = NSLock()
+    private var stopped: Set<String> = []
+    /// Jobs dont un thread natif est effectivement responsable. Un verrou
+    /// d'annulation pose sur un job qui n'en a pas — un telechargement direct,
+    /// un flux non chiffre — ne serait jamais leve.
+    private var owned: Set<String> = []
+
+    private init() {}
+
+    func stop(_ jobID: String) {
+        lock.lock(); defer { lock.unlock() }
+        guard owned.contains(jobID) else { return }
+        stopped.insert(jobID)
+    }
+
+    /// Prend la responsabilite du job, puis la rend en fin de tache. C'est ce
+    /// qui borne `stopped` : sans `owned`, une annulation sur un job natif deja
+    /// termine laisserait une entree pour toute la duree du processus.
+    private func claim(_ jobID: String) {
+        lock.lock(); owned.insert(jobID); lock.unlock()
+    }
+
+    private func forget(_ jobID: String) {
+        lock.lock(); stopped.remove(jobID); owned.remove(jobID); lock.unlock()
+    }
+
+    private func isStopped(_ jobID: String) -> Bool {
+        lock.lock(); defer { lock.unlock() }
+        return stopped.contains(jobID)
+    }
+
+    func run(plan: HLSPlan,
+             jobID: String,
+             name: String,
+             referer: String,
+             userAgent: String?,
+             jar: CookieJar) {
+
+        var headers: [String: String] = [:]
+        if let agent = userAgent, !agent.isEmpty { headers["User-Agent"] = agent }
+        if !referer.isEmpty { headers["Referer"] = referer }
+
+        let total = plan.segments.count
+        CrashLog.step("HLS: \(total) segments, cle\(plan.keyUris.count > 1 ? "s" : "") \(plan.keyUris.count)")
+        claim(jobID)
+
+        Task.detached(priority: .utility) { [self] in
+            defer { forget(jobID) }
+            do {
+                let file = try await assemble(plan: plan, jobID: jobID, name: name,
+                                             headers: headers, jar: jar, total: total)
+                await JobStore.shared.update(id: jobID) {
+                    $0.state = .done
+                    $0.progress = 1
+                    $0.bytes = MediaFile.size(of: file)
+                    $0.localPath = file.path
+                    $0.error = nil
+                }
+                CrashLog.step("HLS termine : \(file.lastPathComponent)")
+            } catch {
+                // Une annulation remonte sous la forme de `HLSError.cancelled`
+                // ou d'une `URLError.cancelled` du transport : les deux
+                // doivent se lire « Annulé », pas comme une panne.
+                let reason: String
+                if isStopped(jobID) || Task.isCancelled {
+                    reason = "Annulé"
+                } else {
+                    reason = (error as? LocalizedError)?.errorDescription
+                        ?? error.localizedDescription
+                }
+                await JobStore.shared.update(id: jobID) {
+                    $0.state = .failed
+                    $0.error = reason
+                }
+                CrashLog.step("HLS en echec : \(reason)")
+            }
+        }
+    }
+
+    private enum Assembly: Equatable {
+        case transportStream
+        case fragmentedMP4
+    }
+
+    private func assemble(plan: HLSPlan,
+                          jobID: String,
+                          name: String,
+                          headers: [String: String],
+                          jar: CookieJar,
+                          total: Int) async throws -> URL {
+
+        let folder = MediaFile.folder
+        let work = folder.appendingPathComponent(".xgrab-\(jobID.prefix(8))",
+                                                 isDirectory: true)
+        try? FileManager.default.removeItem(at: work)
+        try FileManager.default.createDirectory(at: work, withIntermediateDirectories: true)
+        // Le dossier de travail ne contient que des intermediaires : le
+        // fichier livre est deja sorti.
+        defer { try? FileManager.default.removeItem(at: work) }
+
+        // 1. Cles absentes du plan : la page les a lues quand elle a pu, on
+        //    complete ce qu'elle n'a pas obtenu.
+        var fetched = plan.keys
+        if fetched.count < plan.keyUris.count {
+            fetched.append(contentsOf: Array(repeating: Data(),
+                                             count: plan.keyUris.count - fetched.count))
+        }
+        for index in fetched.indices where fetched[index].isEmpty && index < plan.keyUris.count {
+            guard !isStopped(jobID) else { throw HLSError.cancelled }
+            fetched[index] = try await HLSFetcher.key(from: plan.keyUris[index],
+                                                       headers: headers, jar: jar)
+            CrashLog.step("HLS: cle \(index + 1) recuperee en natif")
+        }
+        let keys = fetched
+
+        // 2. Segment d'initialisation. La specification dit qu'il n'est jamais
+        //    chiffre par la cle du media : il s'ecrit tel quel.
+        var head = Data()
+        if let initURL = plan.initURL {
+            head = try await HLSFetcher.data(from: initURL, range: plan.initRange,
+                                             headers: headers, jar: jar)
+        }
+
+        // 3. Segments : `window` requetes en vol, ecriture dans l'ordre.
+        //    L'ordre compte — on ne peut pas permuter, le flux est continu.
+        let joined = work.appendingPathComponent("joined.ts")
+        _ = FileManager.default.createFile(atPath: joined.path, contents: nil)
+        let handle: FileHandle
+        do {
+            handle = try FileHandle(forWritingTo: joined)
+        } catch {
+            // Sans ce bouclage, le job affiche une erreur Foundation brute au
+            // lieu d'une explication utile.
+            throw HLSError.assembly
+        }
+        defer { try? handle.close() }
+
+        var written = Int64(0)
+        var first: Data?
+        if !head.isEmpty {
+            try handle.write(contentsOf: head)
+            written += Int64(head.count)
+        }
+
+        try await withThrowingTaskGroup(of: (Int, Data).self) { group in
+            var scheduled = 0
+            var next = 0
+            var buffered: [Int: Data] = [:]
+
+            while next < total || !buffered.isEmpty {
+                if isStopped(jobID) {
+                    group.cancelAll()
+                    throw HLSError.cancelled
+                }
+                while scheduled < total && (scheduled - next) < window {
+                    let index = scheduled
+                    scheduled += 1
+                    let segment = plan.segments[index]
+                    group.addTask {
+                        let payload = try await HLSFetcher.payload(of: segment, keys: keys,
+                                                                    headers: headers, jar: jar)
+                        return (index, payload)
+                    }
+                }
+                guard let (index, data) = try await group.next() else { break }
+
+                buffered[index] = data
+                while let ready = buffered.removeValue(forKey: next) {
+                    if first == nil { first = ready }
+                    try handle.write(contentsOf: ready)
+                    written += Int64(ready.count)
+                    next += 1
+                    let done = next
+                    let bytes = written
+                    await JobStore.shared.update(id: jobID) {
+                        $0.progress = min(Double(done) / Double(total), 1)
+                        $0.bytes = bytes
+                        $0.state = .running
+                    }
+                }
+            }
+        }
+
+        // 4. Assemblage. Le fichier doit etre vide sur le disque avant que
+        // `AVURLAsset` ne l'ouvre ; la fermeture est differee a la fin de la
+        // fonction, on force donc l'ecriture ici.
+        try handle.synchronizeFile()
+
+        // Le format se decide sur ce que le manifeste annonce, le
+        // test des octets ne servant qu'a confirmer le cas MPEG-2.
+        let sample = first ?? head
+        let kind: Assembly
+        if plan.initURL != nil {
+            // Un segment d'initialisation n'existe que dans un flux fragmente.
+            kind = .fragmentedMP4
+        } else if HLSCrypto.looksLikeMPEGTS(sample) {
+            kind = .transportStream
+        } else {
+            throw HLSError.assembly
+        }
+
+        let target = MediaFile.unique(folder, name)
+        try? FileManager.default.removeItem(at: target)
+
+        switch kind {
+        case .fragmentedMP4:
+            // Init + fragments : deja un MP4 complet, rien a remuxer.
+            try FileManager.default.moveItem(at: joined, to: target)
+        case .transportStream:
+            let remuxed = work.appendingPathComponent("out.mp4")
+            try await remux(from: joined, to: remuxed)
+            try FileManager.default.moveItem(at: remuxed, to: target)
+        }
+        return target
+    }
+
+    /// Convertit le `.ts` concatene. `AVAssetExportPresetPassthrough` ne
+    /// recompresse rien : la qualite d'origine est conservee.
+    ///
+    /// `export(to:as:)` est `iOS 18.0+` sur les SDK 16 et 17, puis recule
+    /// en `iOS 13.0+` avec `@backDeployed` sur le SDK 26. Sans le garde, le
+    /// projet ne compilerait que sur le dernier. Le garde reste necessaire,
+    /// et le compilateur ne se plaint pas de la depreciation dans la branche
+    /// qu'il protege.
+    private func remux(from source: URL, to destination: URL) async throws {
+        let asset = AVURLAsset(url: source)
+        guard let exporter = AVAssetExportSession(asset: asset,
+                                                 presetName: AVAssetExportPresetPassthrough) else {
+            throw HLSError.assembly
+        }
+        exporter.shouldOptimizeForNetworkUse = true
+
+        if #available(iOS 18.0, *) {
+            try await exporter.export(to: destination, as: .mp4)
+        } else {
+            exporter.outputURL = destination
+            exporter.outputFileType = .mp4
+            await withCheckedContinuation { (done: CheckedContinuation<Void, Never>) in
+                exporter.exportAsynchronously { done.resume() }
+            }
+            guard exporter.status == .completed else { throw HLSError.assembly }
         }
     }
 }

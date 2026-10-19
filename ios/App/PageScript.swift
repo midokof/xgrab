@@ -119,6 +119,342 @@ enum PageScript {
         """
     }()
 
+    /// Planificateur HLS execute dans la page.
+    ///
+    /// C'est le seul endroit ou la reponse du CDN est acceptee telle qu'elle,
+    /// avec les cookies et le `User-Agent` du lecteur : le manifeste **et la
+    /// cle** sont donc lus ici, et places de la sont transmises a l'app. Les
+    /// segments, eux, sont telecharges en natif par `HLSDownloader` : faire
+    /// transiter des dizaines de Mo par `postMessage` tuerait le processus
+    /// de contenu.
+    ///
+    /// Regles du script de page, inchangees : aucune fonction native
+    /// modifiee, aucun observateur du DOM. Celui-ci n'ouvre des `fetch` que
+    /// lorsqu'on lui demande un plan.
+    ///
+    /// L'analyse est volontairement la meme que celle de `HLSFetcher` :
+    /// si les deux divergent, le repli natif produira un autre fichier que le
+    /// chemin nominal.
+    static let hlsPlanner: String = {
+        return """
+        (function () {
+          if (window.__xgrabHLS) return;
+
+          var SEG = /\\.m3u8/i;
+
+          function post(payload) {
+            try {
+              window.webkit.messageHandlers.xgrab.postMessage(payload);
+            } catch (e) {}
+          }
+
+          // URL() refuse une reference contenant un espace ou un dièse, que
+          // des CDN produisent pourtant. Sans repli, la liste s'arrete au
+          // premier segment et l'app recoit une adresse relative.
+          function resolve(reference, base) {
+            if (!reference) return '';
+            try { return new URL(reference, base).href; } catch (e) {}
+            try {
+              var safe = reference.split(' ').join('%20').split('#').join('%23');
+              return new URL(safe, base).href;
+            } catch (e) {
+              return '';
+            }
+          }
+
+          // A=1,B="x,y",C=z : la virgule ne coupe pas dans les guillemets.
+          function attributes(text) {
+            var out = {};
+            var key = '', value = '', quoted = false, readingKey = true;
+            for (var i = 0; i < text.length; i++) {
+              var ch = text.charAt(i);
+              if (ch === '"') { quoted = !quoted; continue; }
+              if (ch === ',' && !quoted) {
+                out[key.replace(/^\\s+|\\s+$/g, '').toUpperCase()] =
+                  value.replace(/^\\s+|\\s+$/g, '');
+                key = ''; value = ''; readingKey = true;
+                continue;
+              }
+              if (ch === '=' && readingKey && !quoted) { readingKey = false; continue; }
+              if (readingKey) { key += ch; } else { value += ch; }
+            }
+            out[key.replace(/^\\s+|\\s+$/g, '').toUpperCase()] =
+              value.replace(/^\\s+|\\s+$/g, '');
+            return out;
+          }
+
+          function rows(source) {
+            var lines = String(source).split(/\\r?\\n/);
+            var out = [];
+            for (var i = 0; i < lines.length; i++) {
+              var line = lines[i].replace(/^\\s+|\\s+$/g, '');
+              if (line) out.push(line);
+            }
+            return out;
+          }
+
+          function tail(line) { return line.slice(line.indexOf(':') + 1); }
+
+          function read(url) {
+            return fetch(url, { credentials: 'include', cache: 'no-store' })
+              .then(function (response) {
+                if (!response.ok) throw new Error('HTTP ' + response.status);
+                return response.text();
+              });
+          }
+
+          function toBase64(buffer) {
+            var bytes = new Uint8Array(buffer);
+            var out = '';
+            for (var i = 0; i < bytes.length; i++) {
+              out += String.fromCharCode(bytes[i]);
+            }
+            return btoa(out);
+          }
+
+          // Quatre details font echouer la plupart des lecteurs HLS :
+          // l'URL d'un segment est relative au manifeste de variante ;
+          // #EXTINF:6.006,titre porte une virgule ; un EXT-X-BYTERANGE sans
+          // offset enchaine sur la fin du segment precedent de la meme
+          // ressource ; EXT-X-DISCONTINUITY reinitialise ce curseur.
+          function parseMedia(source, base) {
+            var lines = rows(source);
+            var parsed = { segments: [], keys: [], initUrl: '', initRange: '',
+                           duration: 0, encrypted: false };
+            var slots = {};
+            var sequence = 0, pendingRange = '', cursors = {};
+            var key = -1, iv = '';
+
+            for (var i = 0; i < lines.length; i++) {
+              var line = lines[i];
+
+              if (line.indexOf('#EXT-X-MEDIA-SEQUENCE:') === 0) {
+                sequence = parseInt(tail(line), 10) || 0;
+                continue;
+              }
+
+              if (line.indexOf('#EXT-X-KEY:') === 0) {
+                var declared = attributes(tail(line));
+                var method = (declared.METHOD || 'NONE').toUpperCase();
+                if (method === 'NONE') { key = -1; iv = ''; continue; }
+                var uri = resolve(declared.URI || '', base);
+                if (!uri) throw new Error('clé sans URI exploitable');
+                parsed.encrypted = true;
+                if (slots[uri] === undefined) {
+                  slots[uri] = parsed.keys.length;
+                  parsed.keys.push({ uri: uri, method: method, bytes: '' });
+                }
+                key = slots[uri];
+                iv = declared.IV || '';
+                continue;
+              }
+
+              if (line.indexOf('#EXT-X-MAP:') === 0) {
+                var map = attributes(tail(line));
+                var init = resolve(map.URI || '', base);
+                if (init) {
+                  parsed.initUrl = init;
+                  parsed.initRange = map.BYTERANGE || '';
+                }
+                continue;
+              }
+
+              if (line.indexOf('#EXT-X-BYTERANGE:') === 0) {
+                pendingRange = tail(line);
+                continue;
+              }
+
+              if (line.indexOf('#EXTINF:') === 0) {
+                parsed.duration += parseFloat(tail(line).split(',')[0]) || 0;
+                continue;
+              }
+
+              if (line.indexOf('#EXT-X-DISCONTINUITY') === 0) {
+                cursors = {};
+                pendingRange = '';
+                continue;
+              }
+
+              if (line.charAt(0) === '#') continue;
+
+              var url = resolve(line, base);
+              if (!url) continue;
+
+              var range = '';
+              if (pendingRange) {
+                var bits = pendingRange.split('@');
+                var length = parseInt(bits[0], 10) || 0;
+                var start = bits.length > 1 ? (parseInt(bits[1], 10) || 0)
+                                            : (cursors[url] || 0);
+                if (length > 0) {
+                  range = start + ':' + length;
+                  cursors[url] = start + length;
+                }
+                pendingRange = '';
+              }
+
+              parsed.segments.push({ url: url, key: key, iv: iv,
+                                     seq: sequence, range: range });
+              sequence++;
+            }
+
+            if (!parsed.segments.length) throw new Error('aucun segment listé');
+            return parsed;
+          }
+
+          function parseMaster(source, base) {
+            var lines = rows(source);
+            var found = [];
+            var pending = null;
+
+            for (var i = 0; i < lines.length; i++) {
+              var line = lines[i];
+              if (line.indexOf('#EXT-X-STREAM-INF') === 0) {
+                pending = attributes(tail(line));
+                continue;
+              }
+              if (!pending || !line || line.charAt(0) === '#') continue;
+
+              var declared = pending;
+              pending = null;
+              var url = resolve(line, base);
+              if (!url) continue;
+
+              var size = (declared.RESOLUTION || '').toLowerCase().split('x');
+              found.push({
+                url: url,
+                height: size.length === 2 ? (parseInt(size[1], 10) || 0) : 0,
+                bandwidth: parseInt(
+                  declared['AVERAGE-BANDWIDTH'] || declared.BANDWIDTH, 10) || 0
+              });
+            }
+            return found;
+          }
+
+          function loadKeys(keys) {
+            var jobs = [];
+            for (var i = 0; i < keys.length; i++) {
+              (function (entry) {
+                if (entry.method !== 'AES-128') { entry.bytes = ''; return; }
+                jobs.push(
+                  fetch(entry.uri, { credentials: 'include', cache: 'no-store' })
+                    .then(function (response) {
+                      if (!response.ok) throw new Error('HTTP ' + response.status);
+                      return response.arrayBuffer();
+                    })
+                    .then(function (buffer) { entry.bytes = toBase64(buffer); })
+                    // Une cle illisible n'interrompt pas le plan : l'app la
+                    // retelechargera elle-meme, ou echouera avec un message clair.
+                    .catch(function () { entry.bytes = ''; })
+                );
+              })(keys[i]);
+            }
+            return Promise.all(jobs);
+          }
+
+          function assemble(manifest, variant, height, source) {
+            var parsed = parseMedia(source, variant);
+            return loadKeys(parsed.keys).then(function () {
+              var blobs = [], uris = [], methods = [];
+              for (var i = 0; i < parsed.keys.length; i++) {
+                blobs.push(parsed.keys[i].bytes);
+                uris.push(parsed.keys[i].uri);
+                methods.push(parsed.keys[i].method);
+              }
+
+              var built = {
+                manifest: manifest,
+                variant: variant,
+                height: height || 0,
+                duration: parsed.duration,
+                encrypted: parsed.encrypted,
+                initUrl: parsed.initUrl,
+                initRange: parsed.initRange,
+                keys: blobs,
+                keyUris: uris,
+                keyMethods: methods,
+                urls: [], key: [], iv: [], seq: [], range: []
+              };
+
+              for (var j = 0; j < parsed.segments.length; j++) {
+                built.urls.push(parsed.segments[j].url);
+                built.key.push(parsed.segments[j].key);
+                built.iv.push(parsed.segments[j].iv);
+                built.seq.push(parsed.segments[j].seq);
+                built.range.push(parsed.segments[j].range);
+              }
+              return built;
+            });
+          }
+
+          function plan(url, height) {
+            var manifest = resolve(url, location.href);
+            if (!manifest) return Promise.reject(new Error('URL de manifeste invalide'));
+
+            return read(manifest).then(function (source) {
+              var master = source.indexOf('#EXT-X-STREAM-INF') === -1
+                ? [] : parseMaster(source, manifest);
+
+              if (!master.length) {
+                if (source.indexOf('#EXTINF') === -1 &&
+                    source.indexOf('#EXT-X-MAP') === -1) {
+                  throw new Error('le manifeste ne liste aucun segment');
+                }
+                // Memes reglages que le repli natif : sans quoi le meme flux
+                // produirait `video.mp4` par la page et `video-720p.mp4` par
+                // Swift.
+                return assemble(manifest, manifest, height, source);
+              }
+
+              var wanted = height > 0 ? height : 0;
+              master.sort(function (a, b) {
+                if (wanted > 0) {
+                  return Math.abs(a.height - wanted) - Math.abs(b.height - wanted);
+                }
+                return (b.height - a.height) || (b.bandwidth - a.bandwidth);
+              });
+
+              var pick = master[0];
+              return read(pick.url).then(function (media) {
+                return assemble(manifest, pick.url, pick.height, media);
+              });
+            });
+          }
+
+          window.__xgrabHLS = {
+            isHLS: function (url) { return SEG.test(url || ''); },
+
+            // Requete depuis l'app : renvoie le plan, leve si le manifeste est
+            // illisible ou si le CDN refuse la requete.
+            plan: function (url, height) { return plan(url, height); },
+
+            // Requete depuis le bouton pose dans la page : le plan part par le
+            // message, l'echec aussi. Les deux, sinon le clic ne produit rien
+            // et le silence est indiscernable d'un flux non telechargeable.
+            report: function (url, height) {
+              return plan(url, height).then(function (built) {
+                var payload = { event: 'hls-plan' };
+                for (var name in built) {
+                  if (Object.prototype.hasOwnProperty.call(built, name)) {
+                    payload[name] = built[name];
+                  }
+                }
+                post(payload);
+                return built;
+              }).catch(function (error) {
+                post({
+                  event: 'hls-error',
+                  url: url,
+                  height: height,
+                  message: String((error && error.message) || error)
+                });
+              });
+            }
+          };
+        })();
+        """
+    }()
+
     /// Couche 2 : trouver la video de contenu, y poser un bouton, et
     /// transmettre le flux a l'app.
     static let probe: String = {
@@ -134,6 +470,7 @@ enum PageScript {
             if (window.__xgrab) return;
 
             var SEG = /(videoplayback|\\.mpd|\\.m3u8|migration\\/)/i;
+            var HLS = /\\.m3u8/i;
             var AD_PATH = /$adPath/i;
             var AD_MARK = /$adMark/;
             var MEDIA = /\\.(m3u8|mp4|m4v|webm|mov|mkv)(\\?|#|$)/i;
@@ -315,10 +652,29 @@ enum PageScript {
                 event.stopPropagation();
                 var url = sourceOf(video);
                 if (!url) return;
+
+                // Avant la premiere image decodee, `videoHeight` vaut 0 : on
+                // retomberait alors sur la meilleure variante, souvent la plus
+                // lourde de la liste. La taille affichee, elle, est connue
+                // immediatement et suffit a choisir.
+                var box = video.getBoundingClientRect();
+                var height = video.videoHeight
+                  || (Math.round(box.height / 2) * 2)
+                  || 0;
+
+                // Un flux HLS chiffre n'est pas downloadable par
+                // AVAssetDownloadURLSession : iOS refuse le job en silence.
+                // Le plan est donc construit ici, dans la page, puis les
+                // segments sont telecharges en natif.
+                if (HLS.test(url) && window.__xgrabHLS) {
+                  window.__xgrabHLS.report(url, height);
+                  return;
+                }
+
                 post({
                   event: 'download',
                   url: url,
-                  height: video.videoHeight || 0,
+                  height: height,
                   page: location.href,
                   title: (document.title || '').trim()
                 });

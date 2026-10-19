@@ -19,6 +19,10 @@ struct Job: Codable, Identifiable {
     /// variante HLS.
     var height: Int?
 
+    /// Titre de la page au moment du clic. `filename` est deja le nom
+    /// calcule : le repasser en entrée produirait `video-720p-720p.mp4`.
+    var title: String?
+
     /// Conserves pour rejouer la requete : les CDN protegent le fichier par
     /// l'User-Agent et les cookies de session.
     var userAgent: String?
@@ -82,7 +86,8 @@ final class JobStore: ObservableObject {
              userAgent: String?,
              cookies: String?,
              filename: String,
-             height: Int?) -> Job {
+             height: Int?,
+             title: String? = nil) -> Job {
         let job = Job(
             id: UUID().uuidString,
             url: url,
@@ -94,6 +99,7 @@ final class JobStore: ObservableObject {
             error: nil,
             localPath: nil,
             height: height,
+            title: title,
             userAgent: userAgent,
             cookies: cookies
         )
